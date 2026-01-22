@@ -1,0 +1,15 @@
+services:
+  renamearr:
+    build: .
+    container_name: renamearr
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Accès à tous les montages
+      - /mnt:/mnt
+      # Base de données et configuration persistante
+      - ./data:/app/data
+    environment:
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - TMDB_LANGUAGE=fr-FR
