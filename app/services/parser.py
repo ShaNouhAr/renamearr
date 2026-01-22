@@ -45,13 +45,35 @@ class MediaParser:
         r'[Ee]\d{1,2}',  # E01
     ]
     
+    # Pattern pour les versions (v1, v2, v3, etc.) collées aux épisodes
+    VERSION_PATTERN = r'([Ee]\d{1,3})v\d+'  # E01v2 -> E01
+    
     def __init__(self):
         pass
     
+    def _preprocess_filename(self, filename: str) -> str:
+        """Pré-traite le nom de fichier pour améliorer le parsing.
+        
+        - Supprime les indicateurs de version (v2, v3) collés aux épisodes
+        - Normalise certains formats problématiques
+        """
+        processed = filename
+        
+        # Remplacer S01E01v2 par S01E01 (supprimer le suffixe de version)
+        processed = re.sub(self.VERSION_PATTERN, r'\1', processed, flags=re.IGNORECASE)
+        
+        # Aussi gérer le format avec espace: "E01 v2" -> "E01"
+        processed = re.sub(r'([Ee]\d{1,3})\s*v\d+', r'\1', processed)
+        
+        return processed
+    
     def parse(self, filename: str) -> ParsedMedia:
         """Parse un nom de fichier et extrait les informations média."""
+        # Pré-traiter le nom de fichier pour gérer les cas spéciaux (v2, etc.)
+        processed_filename = self._preprocess_filename(filename)
+        
         # Utiliser guessit pour le parsing initial
-        result = guessit(filename)
+        result = guessit(processed_filename)
         
         parsed = ParsedMedia()
         

@@ -511,7 +511,7 @@ async def ignore_file(file_id: int, session: AsyncSession = Depends(get_session)
 
 @router.post("/files/{file_id}/reprocess", response_model=MediaFileResponse)
 async def reprocess_file(file_id: int, session: AsyncSession = Depends(get_session)):
-    """Relance le traitement d'un fichier."""
+    """Relance le traitement d'un fichier avec re-parsing."""
     result = await session.execute(
         select(MediaFile).where(MediaFile.id == file_id)
     )
@@ -525,9 +525,26 @@ async def reprocess_file(file_id: int, session: AsyncSession = Depends(get_sessi
         file_linker.remove_link(Path(media_file.destination_path))
         media_file.destination_path = None
     
-    # Remettre en attente
+    # Re-parser le nom du fichier pour obtenir les nouvelles valeurs
+    from app.services.parser import parser
+    file_path = Path(media_file.source_path)
+    parsed = parser.parse_path(file_path)
+    
+    # Mettre à jour les valeurs parsées
+    media_file.parsed_title = parsed.title
+    media_file.parsed_year = parsed.year
+    media_file.parsed_season = parsed.season
+    media_file.parsed_episode = parsed.episode
+    if parsed.media_type != MediaType.UNKNOWN:
+        media_file.media_type = parsed.media_type
+    
+    # Remettre en attente et nettoyer les infos TMDB
     media_file.status = ProcessingStatus.PENDING
     media_file.error_message = None
+    media_file.tmdb_id = None
+    media_file.tmdb_title = None
+    media_file.tmdb_year = None
+    media_file.tmdb_poster = None
     await session.commit()
     
     # Retraiter
@@ -539,6 +556,72 @@ async def reprocess_file(file_id: int, session: AsyncSession = Depends(get_sessi
     await event_manager.emit_stats_updated(stats)
     
     return MediaFileResponse.model_validate(media_file)
+
+
+@router.post("/files/reprocess-all")
+async def reprocess_all_files(session: AsyncSession = Depends(get_session)):
+    """Relance le traitement de tous les fichiers en statut MANUAL ou FAILED."""
+    from app.services.parser import parser
+    
+    result = await session.execute(
+        select(MediaFile).where(
+            MediaFile.status.in_([ProcessingStatus.MANUAL, ProcessingStatus.FAILED])
+        )
+    )
+    files_to_reprocess = result.scalars().all()
+    
+    count = len(files_to_reprocess)
+    processed = 0
+    linked = 0
+    
+    for media_file in files_to_reprocess:
+        # Supprimer l'ancien lien si existant
+        if media_file.destination_path:
+            file_linker.remove_link(Path(media_file.destination_path))
+            media_file.destination_path = None
+        
+        # Re-parser le nom du fichier
+        file_path = Path(media_file.source_path)
+        parsed = parser.parse_path(file_path)
+        
+        # Mettre à jour les valeurs parsées
+        media_file.parsed_title = parsed.title
+        media_file.parsed_year = parsed.year
+        media_file.parsed_season = parsed.season
+        media_file.parsed_episode = parsed.episode
+        if parsed.media_type != MediaType.UNKNOWN:
+            media_file.media_type = parsed.media_type
+        
+        # Remettre en attente
+        media_file.status = ProcessingStatus.PENDING
+        media_file.error_message = None
+        media_file.tmdb_id = None
+        media_file.tmdb_title = None
+        media_file.tmdb_year = None
+        media_file.tmdb_poster = None
+        
+        # Retraiter
+        media_file = await media_scanner.process_file(session, media_file)
+        processed += 1
+        
+        if media_file.status == ProcessingStatus.LINKED:
+            linked += 1
+        
+        # Émettre événement de mise à jour
+        await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
+    
+    await session.commit()
+    
+    # Émettre stats mises à jour
+    stats = await media_scanner.get_stats(session)
+    await event_manager.emit_stats_updated(stats)
+    
+    return {
+        "message": f"{processed} fichiers retraités, {linked} liés",
+        "total": count,
+        "processed": processed,
+        "linked": linked
+    }
 
 
 # ============== Manual Match ==============
@@ -716,6 +799,96 @@ async def process_pending(session: AsyncSession = Depends(get_session)):
     }
 
 
+@router.post("/retry-failed")
+async def retry_failed(session: AsyncSession = Depends(get_session)):
+    """Retraite tous les fichiers en échec ou manuels."""
+    # Récupérer les fichiers en échec, manuels et en attente
+    result = await session.execute(
+        select(MediaFile).where(
+            MediaFile.status.in_([
+                ProcessingStatus.FAILED,
+                ProcessingStatus.MANUAL,
+                ProcessingStatus.PENDING
+            ])
+        )
+    )
+    files_to_retry = result.scalars().all()
+    
+    processed = 0
+    linked = 0
+    still_failed = 0
+    
+    for media_file in files_to_retry:
+        # Réinitialiser le statut
+        media_file.status = ProcessingStatus.PENDING
+        media_file.error_message = None
+        
+        # Supprimer l'ancien lien si existant
+        if media_file.destination_path:
+            file_linker.remove_link(Path(media_file.destination_path))
+            media_file.destination_path = None
+        
+        await session.commit()
+        
+        # Retraiter
+        media_file = await media_scanner.process_file(session, media_file)
+        processed += 1
+        
+        # Émettre événement de mise à jour
+        await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
+        
+        if media_file.status == ProcessingStatus.LINKED:
+            linked += 1
+        elif media_file.status in [ProcessingStatus.FAILED, ProcessingStatus.MANUAL]:
+            still_failed += 1
+    
+    # Émettre stats mises à jour
+    stats = await media_scanner.get_stats(session)
+    await event_manager.emit_stats_updated(stats)
+    
+    return {
+        "message": "Retraitement terminé",
+        "processed": processed,
+        "linked": linked,
+        "still_failed": still_failed
+    }
+
+
+@router.post("/cleanup-ignored")
+async def cleanup_ignored_files(session: AsyncSession = Depends(get_session)):
+    """Supprime les fichiers qui correspondent aux patterns d'ignorance (extras, creditless, etc.)."""
+    result = await session.execute(select(MediaFile))
+    all_files = result.scalars().all()
+    
+    deleted_count = 0
+    deleted_files = []
+    
+    for media_file in all_files:
+        if media_scanner.should_ignore_file(media_file.source_filename):
+            # Supprimer le lien si existant
+            if media_file.destination_path:
+                file_linker.remove_link(Path(media_file.destination_path))
+            
+            deleted_files.append(media_file.source_filename[:50])
+            await session.delete(media_file)
+            deleted_count += 1
+            
+            # Émettre événement de suppression
+            await event_manager.emit_file_deleted({"id": media_file.id})
+    
+    await session.commit()
+    
+    # Émettre stats mises à jour
+    stats = await media_scanner.get_stats(session)
+    await event_manager.emit_stats_updated(stats)
+    
+    return {
+        "message": f"{deleted_count} fichiers ignorés supprimés",
+        "deleted_count": deleted_count,
+        "examples": deleted_files[:10]
+    }
+
+
 @router.post("/wipe")
 async def wipe_database(session: AsyncSession = Depends(get_session)):
     """Supprime tous les fichiers de la base de données et leurs liens."""
@@ -775,6 +948,8 @@ async def wipe_database(session: AsyncSession = Depends(get_session)):
         "ignored": 0,
         "movies_total": 0,
         "tv_total": 0,
+        "series_count": 0,
+        "series_linked": 0,
         "pending_movies": 0,
         "pending_tv": 0,
         "linked_movies": 0,

@@ -181,21 +181,46 @@ class TMDBService:
         if not title:
             return None
         
-        results = []
+        # Fonction interne pour chercher
+        async def do_search(query: str, search_year: Optional[int] = None):
+            if media_type == MediaType.MOVIE:
+                return await self.search_movie(query, search_year)
+            elif media_type == MediaType.TV:
+                return await self.search_tv(query, search_year)
+            else:
+                return await self.search_multi(query, search_year)
         
-        if media_type == MediaType.MOVIE:
-            results = await self.search_movie(title, year)
-        elif media_type == MediaType.TV:
-            results = await self.search_tv(title, year)
-        else:
-            results = await self.search_multi(title, year)
+        # Stratégie de recherche progressive
+        search_attempts = []
         
-        if not results:
-            return None
+        # 1. Recherche avec titre et année
+        if year:
+            search_attempts.append((title, year))
         
-        # Retourner le résultat le plus populaire
-        # On pourrait améliorer avec un scoring basé sur la correspondance du titre
-        return results[0]
+        # 2. Recherche avec titre seul (sans année)
+        search_attempts.append((title, None))
+        
+        # 3. Si le titre est court ou spécial, essayer des variantes
+        clean_title = title.strip()
+        if len(clean_title) <= 4 or not clean_title.isalnum():
+            # Essayer avec le titre tel quel (cas spéciaux comme "xXx", "It", etc.)
+            search_attempts.append((clean_title, year if year else None))
+        
+        # Exécuter les recherches
+        for query, search_year in search_attempts:
+            results = await do_search(query, search_year)
+            
+            if results:
+                # Si on a l'année, chercher une correspondance exacte
+                if year:
+                    for result in results:
+                        if result.year == year:
+                            return result
+                
+                # Sinon retourner le plus populaire
+                return results[0]
+        
+        return None
 
 
 # Instance globale

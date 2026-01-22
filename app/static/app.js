@@ -368,6 +368,7 @@ function handleStatsUpdated(stats) {
     
     // Mettre à jour les compteurs détaillés (films/séries)
     updateDetailCounter('stat-movies-total', stats.movies_total);
+    updateDetailCounter('stat-series-count', stats.series_count);
     updateDetailCounter('stat-tv-total', stats.tv_total);
     
     updateDetailCounter('stat-pending-movies', stats.pending_movies);
@@ -446,7 +447,11 @@ function handleScanProgress(data) {
 
 function handleScanCompleted(stats) {
     isScanning = false;
-    showToast(`Scan terminé: ${stats.new} nouveaux, ${stats.linked} liés`, 'success');
+    let message = `Scan terminé: ${stats.new} nouveaux, ${stats.linked} liés`;
+    if (stats.deleted > 0) {
+        message += `, ${stats.deleted} supprimés`;
+    }
+    showToast(message, 'success');
     
     // Restaurer le bouton
     const scanBtn = document.querySelector('.header-right .btn-primary');
@@ -528,6 +533,7 @@ async function loadStats() {
         
         // Compteurs détaillés films/séries
         setDetailCounter('stat-movies-total', stats.movies_total);
+        setDetailCounter('stat-series-count', stats.series_count);
         setDetailCounter('stat-tv-total', stats.tv_total);
         
         setDetailCounter('stat-pending-movies', stats.pending_movies);
@@ -946,6 +952,45 @@ async function ignoreFile(fileId) {
         await loadFiles();
     } catch (error) {
         showToast(`Erreur: ${error.message}`, 'error');
+    }
+}
+
+async function retryAllFailed() {
+    const btn = document.querySelector('.btn-secondary[onclick="retryAllFailed()"]');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = `
+            <div class="spinner-small"></div>
+            Retraitement...
+        `;
+    }
+    
+    try {
+        showToast('Retraitement en cours...', 'info');
+        const result = await api('/retry-failed', { method: 'POST' });
+        
+        let message = `Retraitement terminé: ${result.linked} liés`;
+        if (result.still_failed > 0) {
+            message += `, ${result.still_failed} toujours en échec`;
+        }
+        showToast(message, result.linked > 0 ? 'success' : 'warning');
+        
+        await loadFiles();
+    } catch (error) {
+        showToast(`Erreur: ${error.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 2v6h-6"/>
+                    <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+                    <path d="M3 22v-6h6"/>
+                    <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+                </svg>
+                Réessayer
+            `;
+        }
     }
 }
 

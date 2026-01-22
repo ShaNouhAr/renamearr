@@ -1,7 +1,9 @@
 """Service de scan des fichiers médias."""
 import os
+import re
+import asyncio
 from pathlib import Path
-from typing import AsyncGenerator, Optional
+from typing import Optional
 from datetime import datetime
 
 from sqlalchemy import select, func
@@ -20,8 +22,26 @@ from app.services.config_manager import config_manager
 class MediaScanner:
     """Service de scan et traitement des fichiers médias."""
     
+    # Nombre de fichiers traités en parallèle
+    PARALLEL_WORKERS = 15
+    # Fréquence des mises à jour SSE (tous les N fichiers)
+    SSE_UPDATE_FREQUENCY = 50
+    
+    # Patterns de fichiers à ignorer (génériques anime uniquement)
+    # Note: pas de flags inline (?i), on utilise re.IGNORECASE à la compilation
+    IGNORE_PATTERNS = [
+        r'creditless',          # Creditless versions (OP/ED sans crédits)
+        r'\bNCOP\b',            # No Credit Opening
+        r'\bNCED\b',            # No Credit Ending
+    ]
+    
+    # Patterns spécifiques pour OP/ED qui ne sont pas des épisodes
+    # Format: "ED1 Creditless", "OP2", "ED Creditless" etc (pas S01E01)
+    OPED_PATTERN = r'^(?:.*\s)?(?:OP|ED)\d*(?:\s|v\d|$)'
+    
     def __init__(self):
-        pass
+        self._ignore_regex = re.compile('|'.join(self.IGNORE_PATTERNS), re.IGNORECASE)
+        self._oped_regex = re.compile(self.OPED_PATTERN, re.IGNORECASE)
     
     @property
     def source_mode(self) -> str:
@@ -47,6 +67,22 @@ class MediaScanner:
     def min_video_size(self) -> int:
         return config_manager.get_min_video_size()
     
+    def should_ignore_file(self, filename: str) -> bool:
+        """Vérifie si un fichier doit être ignoré (extras, creditless, etc.)."""
+        # Si c'est un vrai épisode (S01E01), ne pas ignorer
+        if re.search(r'S\d{1,2}E\d{1,2}', filename, re.IGNORECASE):
+            return False
+        
+        # Vérifier les patterns généraux d'ignorance
+        if self._ignore_regex.search(filename):
+            return True
+        
+        # Vérifier les patterns OP/ED spécifiques (qui ne sont pas des épisodes)
+        if self._oped_regex.search(filename):
+            return True
+        
+        return False
+    
     def is_video_file(self, path: Path) -> bool:
         """Vérifie si un fichier est une vidéo valide."""
         if not path.is_file():
@@ -54,6 +90,10 @@ class MediaScanner:
         
         # Vérifier l'extension
         if path.suffix.lower() not in self.video_extensions:
+            return False
+        
+        # Vérifier si le fichier doit être ignoré (extras, creditless, etc.)
+        if self.should_ignore_file(path.name):
             return False
         
         # Vérifier la taille minimum
@@ -149,9 +189,6 @@ class MediaScanner:
         )
         
         session.add(media_file)
-        await session.commit()
-        await session.refresh(media_file)
-        
         return media_file, True
     
     async def process_file(self, session: AsyncSession, media_file: MediaFile) -> MediaFile:
@@ -167,7 +204,16 @@ class MediaScanner:
             if not match:
                 media_file.status = ProcessingStatus.MANUAL
                 media_file.error_message = "Aucune correspondance TMDB trouvée"
-                await session.commit()
+                
+                # Créer un lien temporaire dans le dossier _Manual
+                source_path = Path(media_file.source_path)
+                success, message, dest_path = file_linker.link_manual(
+                    source_path=source_path,
+                    media_type=media_file.media_type
+                )
+                if success:
+                    media_file.destination_path = str(dest_path)
+                
                 return media_file
             
             # Mettre à jour avec les infos TMDB
@@ -178,8 +224,6 @@ class MediaScanner:
             media_file.media_type = match.media_type
             media_file.status = ProcessingStatus.MATCHED
             
-            await session.commit()
-            
             # Créer le lien
             await self.create_link(session, media_file)
             
@@ -188,7 +232,6 @@ class MediaScanner:
         except Exception as e:
             media_file.status = ProcessingStatus.FAILED
             media_file.error_message = str(e)
-            await session.commit()
             return media_file
     
     async def create_link(self, session: AsyncSession, media_file: MediaFile) -> MediaFile:
@@ -196,7 +239,6 @@ class MediaScanner:
         if not media_file.tmdb_id or not media_file.tmdb_title:
             media_file.status = ProcessingStatus.FAILED
             media_file.error_message = "Informations TMDB manquantes"
-            await session.commit()
             return media_file
         
         source_path = Path(media_file.source_path)
@@ -214,7 +256,6 @@ class MediaScanner:
                 if media_file.parsed_season is None or media_file.parsed_episode is None:
                     media_file.status = ProcessingStatus.MANUAL
                     media_file.error_message = "Saison ou épisode manquant"
-                    await session.commit()
                     return media_file
                 
                 success, message, dest_path = file_linker.link_tv_episode(
@@ -228,7 +269,6 @@ class MediaScanner:
             else:
                 media_file.status = ProcessingStatus.MANUAL
                 media_file.error_message = "Type de média inconnu"
-                await session.commit()
                 return media_file
             
             if success:
@@ -239,13 +279,11 @@ class MediaScanner:
                 media_file.status = ProcessingStatus.FAILED
                 media_file.error_message = message
             
-            await session.commit()
             return media_file
             
         except Exception as e:
             media_file.status = ProcessingStatus.FAILED
             media_file.error_message = str(e)
-            await session.commit()
             return media_file
     
     async def get_stats(self, session: AsyncSession) -> dict:
@@ -261,7 +299,7 @@ class MediaScanner:
             )
             stats[status.value] = count or 0
         
-        # Stats par type de média
+        # Stats par type de média (nombre de fichiers)
         movies_total = await session.scalar(
             select(func.count(MediaFile.id)).where(MediaFile.media_type == MediaType.MOVIE)
         )
@@ -269,7 +307,26 @@ class MediaScanner:
             select(func.count(MediaFile.id)).where(MediaFile.media_type == MediaType.TV)
         )
         stats["movies_total"] = movies_total or 0
-        stats["tv_total"] = tv_total or 0
+        stats["tv_total"] = tv_total or 0  # Nombre d'épisodes
+        
+        # Nombre de séries distinctes (basé sur tmdb_id unique)
+        series_count = await session.scalar(
+            select(func.count(func.distinct(MediaFile.tmdb_id))).where(
+                MediaFile.media_type == MediaType.TV,
+                MediaFile.tmdb_id.isnot(None)
+            )
+        )
+        stats["series_count"] = series_count or 0
+        
+        # Nombre de séries liées distinctes
+        series_linked = await session.scalar(
+            select(func.count(func.distinct(MediaFile.tmdb_id))).where(
+                MediaFile.media_type == MediaType.TV,
+                MediaFile.tmdb_id.isnot(None),
+                MediaFile.status == ProcessingStatus.LINKED
+            )
+        )
+        stats["series_linked"] = series_linked or 0
         
         # Stats détaillées par statut ET type
         for status in [ProcessingStatus.LINKED, ProcessingStatus.PENDING, ProcessingStatus.MANUAL, ProcessingStatus.FAILED]:
@@ -314,8 +371,126 @@ class MediaScanner:
             "processed_at": media_file.processed_at.isoformat() if media_file.processed_at else None,
         }
     
+    async def cleanup_deleted_files(self, session: AsyncSession, event_manager=None) -> int:
+        """Supprime les entrées dont le fichier source n'existe plus.
+        
+        Returns:
+            Nombre de fichiers supprimés
+        """
+        # Récupérer tous les fichiers de la base
+        result = await session.execute(select(MediaFile))
+        all_files = result.scalars().all()
+        
+        deleted_count = 0
+        
+        for media_file in all_files:
+            source_path = Path(media_file.source_path)
+            
+            # Vérifier si le fichier source existe toujours
+            if not source_path.exists():
+                # Supprimer le lien de destination si existant
+                if media_file.destination_path:
+                    dest_path = Path(media_file.destination_path)
+                    try:
+                        if dest_path.exists() or dest_path.is_symlink():
+                            dest_path.unlink()
+                            
+                            # Nettoyer les dossiers vides
+                            parent = dest_path.parent
+                            while parent and str(parent) not in [
+                                str(config_manager.get_movies_path()),
+                                str(config_manager.get_tv_path())
+                            ]:
+                                try:
+                                    if parent.is_dir() and not any(parent.iterdir()):
+                                        parent.rmdir()
+                                        parent = parent.parent
+                                    else:
+                                        break
+                                except Exception:
+                                    break
+                    except Exception:
+                        pass
+                
+                # Émettre événement de suppression
+                if event_manager:
+                    await event_manager.emit_file_deleted({"id": media_file.id})
+                
+                # Supprimer de la base
+                await session.delete(media_file)
+                deleted_count += 1
+        
+        if deleted_count > 0:
+            await session.commit()
+            
+            # Émettre stats mises à jour
+            if event_manager:
+                current_stats = await self.get_stats(session)
+                await event_manager.emit_stats_updated(current_stats)
+        
+        return deleted_count
+    
+    async def _process_batch(
+        self,
+        session: AsyncSession,
+        files_batch: list[tuple[Path, Optional[MediaType]]],
+        semaphore: asyncio.Semaphore,
+        stats: dict,
+        stats_lock: asyncio.Lock,
+        event_manager=None,
+        processed_counter: dict = None
+    ):
+        """Traite un batch de fichiers avec contrôle de concurrence."""
+        
+        async def process_single(file_path: Path, forced_type: Optional[MediaType]):
+            async with semaphore:
+                try:
+                    # Créer ou récupérer le fichier
+                    media_file, created = await self.get_or_create_file(session, file_path, forced_type)
+                    
+                    if created:
+                        async with stats_lock:
+                            stats["new"] += 1
+                    
+                    # Traiter seulement les fichiers en attente
+                    if media_file.status == ProcessingStatus.PENDING:
+                        media_file = await self.process_file(session, media_file)
+                        
+                        async with stats_lock:
+                            stats["processed"] += 1
+                            
+                            if media_file.status == ProcessingStatus.LINKED:
+                                stats["linked"] += 1
+                            elif media_file.status == ProcessingStatus.FAILED:
+                                stats["failed"] += 1
+                            elif media_file.status == ProcessingStatus.MANUAL:
+                                stats["manual"] += 1
+                    
+                    # Incrémenter le compteur et émettre progression périodiquement
+                    if processed_counter is not None:
+                        async with stats_lock:
+                            processed_counter["count"] += 1
+                            count = processed_counter["count"]
+                            total = processed_counter["total"]
+                            
+                            # Émettre progression tous les N fichiers
+                            if event_manager and count % self.SSE_UPDATE_FREQUENCY == 0:
+                                await event_manager.emit_scan_progress(count, total, f"{count}/{total} fichiers traités")
+                    
+                    return media_file, created
+                    
+                except Exception as e:
+                    print(f"ERROR processing {file_path}: {e}")
+                    return None, False
+        
+        # Traiter tous les fichiers du batch en parallèle
+        tasks = [process_single(fp, ft) for fp, ft in files_batch]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return results
+    
     async def scan_and_process(self, directory: Optional[Path] = None, event_manager=None) -> dict:
-        """Scanne et traite tous les nouveaux fichiers."""
+        """Scanne et traite tous les nouveaux fichiers avec traitement parallèle."""
         # Si un dossier spécifique est fourni, scanner uniquement celui-ci
         if directory:
             video_files = self.scan_directory(directory, None)
@@ -330,53 +505,52 @@ class MediaScanner:
             "linked": 0,
             "failed": 0,
             "manual": 0,
+            "deleted": 0,
         }
         
         # Émettre événement de début
         if event_manager:
             await event_manager.emit_scan_started()
+            await event_manager.emit_scan_progress(0, len(video_files), f"Scan de {len(video_files)} fichiers...")
+        
+        # Semaphore pour limiter les requêtes TMDB concurrentes
+        semaphore = asyncio.Semaphore(self.PARALLEL_WORKERS)
+        stats_lock = asyncio.Lock()
+        processed_counter = {"count": 0, "total": len(video_files)}
         
         async with async_session() as session:
-            total = len(video_files)
+            # Traiter par batches pour commit périodique
+            BATCH_SIZE = 100
             
-            for idx, (file_path, forced_type) in enumerate(video_files):
-                # Émettre progression
+            for i in range(0, len(video_files), BATCH_SIZE):
+                batch = video_files[i:i + BATCH_SIZE]
+                
+                await self._process_batch(
+                    session=session,
+                    files_batch=batch,
+                    semaphore=semaphore,
+                    stats=stats,
+                    stats_lock=stats_lock,
+                    event_manager=event_manager,
+                    processed_counter=processed_counter
+                )
+                
+                # Commit après chaque batch
+                await session.commit()
+                
+                # Émettre stats mises à jour après chaque batch
                 if event_manager:
-                    await event_manager.emit_scan_progress(idx + 1, total, file_path.name)
-                
-                # Créer ou récupérer le fichier
-                media_file, created = await self.get_or_create_file(session, file_path, forced_type)
-                
-                if created:
-                    stats["new"] += 1
-                    # Émettre événement d'ajout
-                    if event_manager:
-                        await event_manager.emit_file_added(self.file_to_dict(media_file))
-                        # Émettre stats mises à jour
-                        current_stats = await self.get_stats(session)
-                        await event_manager.emit_stats_updated(current_stats)
-                
-                # Traiter seulement les fichiers en attente
-                if media_file.status == ProcessingStatus.PENDING:
-                    media_file = await self.process_file(session, media_file)
-                    stats["processed"] += 1
-                    
-                    # Émettre événement de mise à jour
-                    if event_manager:
-                        await event_manager.emit_file_updated(self.file_to_dict(media_file))
-                        # Émettre stats mises à jour
-                        current_stats = await self.get_stats(session)
-                        await event_manager.emit_stats_updated(current_stats)
-                    
-                    if media_file.status == ProcessingStatus.LINKED:
-                        stats["linked"] += 1
-                    elif media_file.status == ProcessingStatus.FAILED:
-                        stats["failed"] += 1
-                    elif media_file.status == ProcessingStatus.MANUAL:
-                        stats["manual"] += 1
+                    current_stats = await self.get_stats(session)
+                    await event_manager.emit_stats_updated(current_stats)
+            
+            # Nettoyer les fichiers supprimés (sources qui n'existent plus)
+            deleted_count = await self.cleanup_deleted_files(session, event_manager)
+            stats["deleted"] = deleted_count
             
             # Émettre événement de fin
             if event_manager:
+                final_stats = await self.get_stats(session)
+                await event_manager.emit_stats_updated(final_stats)
                 await event_manager.emit_scan_completed(stats)
         
         return stats

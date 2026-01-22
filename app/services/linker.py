@@ -32,6 +32,8 @@ def sanitize_filename(name: str) -> str:
 class FileLinker:
     """Service pour créer des hardlinks et organiser les fichiers."""
     
+    MANUAL_FOLDER_NAME = "_Manual"
+    
     def __init__(self):
         pass
     
@@ -42,6 +44,12 @@ class FileLinker:
     @property
     def tv_path(self) -> Path:
         return config_manager.get_tv_path()
+    
+    @property
+    def manual_path(self) -> Path:
+        """Dossier pour les fichiers non identifiés."""
+        # Utiliser le même parent que movies_path
+        return self.movies_path.parent / self.MANUAL_FOLDER_NAME
     
     def _ensure_dir(self, path: Path) -> None:
         """S'assure qu'un dossier existe."""
@@ -157,6 +165,32 @@ class FileLinker:
         success, message = self.create_hardlink(source_path, destination)
         return success, message, destination if success else None
     
+    def link_manual(
+        self,
+        source_path: Path,
+        media_type: Optional[MediaType] = None
+    ) -> tuple[bool, str, Optional[Path]]:
+        """Crée un hardlink vers le dossier _Manual pour un fichier non identifié.
+        
+        Structure: _Manual/Movies/ ou _Manual/TV/ selon le type
+        
+        Returns:
+            Tuple (success, message, destination_path)
+        """
+        # Sous-dossier selon le type de média
+        if media_type == MediaType.MOVIE:
+            subfolder = "Movies"
+        elif media_type == MediaType.TV:
+            subfolder = "TV"
+        else:
+            subfolder = "Unknown"
+        
+        # Garder le nom original du fichier
+        destination = self.manual_path / subfolder / source_path.name
+        
+        success, message = self.create_hardlink(source_path, destination)
+        return success, message, destination if success else None
+    
     def remove_link(self, destination_path: Path) -> tuple[bool, str]:
         """Supprime un lien (hardlink ou symlink).
         
@@ -179,7 +213,8 @@ class FileLinker:
         """Supprime les dossiers vides en remontant."""
         try:
             # Ne pas supprimer les dossiers racine
-            if path in [self.movies_path, self.tv_path]:
+            root_paths = [self.movies_path, self.tv_path, self.manual_path]
+            if path in root_paths:
                 return
             
             if path.is_dir() and not any(path.iterdir()):

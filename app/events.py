@@ -53,6 +53,10 @@ class EventManager:
         """Émet un événement de mise à jour de fichier."""
         await self.emit(EventType.FILE_UPDATED, file_data)
     
+    async def emit_file_deleted(self, file_data: dict):
+        """Émet un événement de suppression de fichier."""
+        await self.emit(EventType.FILE_DELETED, file_data)
+    
     async def emit_stats_updated(self, stats: dict):
         """Émet un événement de mise à jour des stats."""
         await self.emit(EventType.STATS_UPDATED, stats)
