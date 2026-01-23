@@ -109,7 +109,8 @@ class FileLinker:
             self._ensure_dir(destination.parent)
             
             # Supprimer le fichier de destination s'il existe déjà
-            if destination.exists():
+            # Note: is_symlink() détecte aussi les symlinks cassés, exists() non
+            if destination.exists() or destination.is_symlink():
                 destination.unlink()
             
             # Créer le hardlink
@@ -121,7 +122,7 @@ class FileLinker:
             # Si hardlink impossible (cross-device), essayer symlink
             if e.errno == 18:  # EXDEV - Invalid cross-device link
                 try:
-                    if destination.exists():
+                    if destination.exists() or destination.is_symlink():
                         destination.unlink()
                     destination.symlink_to(source)
                     return True, f"Symlink créé (cross-device): {destination}"

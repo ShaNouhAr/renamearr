@@ -432,7 +432,6 @@ class MediaScanner:
     
     async def _process_batch(
         self,
-        session: AsyncSession,
         files_batch: list[tuple[Path, Optional[MediaType]]],
         semaphore: asyncio.Semaphore,
         stats: dict,
@@ -444,44 +443,49 @@ class MediaScanner:
         
         async def process_single(file_path: Path, forced_type: Optional[MediaType]):
             async with semaphore:
-                try:
-                    # Créer ou récupérer le fichier
-                    media_file, created = await self.get_or_create_file(session, file_path, forced_type)
-                    
-                    if created:
-                        async with stats_lock:
-                            stats["new"] += 1
-                    
-                    # Traiter seulement les fichiers en attente
-                    if media_file.status == ProcessingStatus.PENDING:
-                        media_file = await self.process_file(session, media_file)
+                # Utiliser une session dédiée par fichier pour éviter les conflits
+                async with async_session() as session:
+                    try:
+                        # Créer ou récupérer le fichier
+                        media_file, created = await self.get_or_create_file(session, file_path, forced_type)
                         
-                        async with stats_lock:
-                            stats["processed"] += 1
+                        if created:
+                            async with stats_lock:
+                                stats["new"] += 1
+                        
+                        # Traiter seulement les fichiers en attente
+                        if media_file.status == ProcessingStatus.PENDING:
+                            media_file = await self.process_file(session, media_file)
                             
-                            if media_file.status == ProcessingStatus.LINKED:
-                                stats["linked"] += 1
-                            elif media_file.status == ProcessingStatus.FAILED:
-                                stats["failed"] += 1
-                            elif media_file.status == ProcessingStatus.MANUAL:
-                                stats["manual"] += 1
-                    
-                    # Incrémenter le compteur et émettre progression périodiquement
-                    if processed_counter is not None:
-                        async with stats_lock:
-                            processed_counter["count"] += 1
-                            count = processed_counter["count"]
-                            total = processed_counter["total"]
-                            
-                            # Émettre progression tous les N fichiers
-                            if event_manager and count % self.SSE_UPDATE_FREQUENCY == 0:
-                                await event_manager.emit_scan_progress(count, total, f"{count}/{total} fichiers traités")
-                    
-                    return media_file, created
-                    
-                except Exception as e:
-                    print(f"ERROR processing {file_path}: {e}")
-                    return None, False
+                            async with stats_lock:
+                                stats["processed"] += 1
+                                
+                                if media_file.status == ProcessingStatus.LINKED:
+                                    stats["linked"] += 1
+                                elif media_file.status == ProcessingStatus.FAILED:
+                                    stats["failed"] += 1
+                                elif media_file.status == ProcessingStatus.MANUAL:
+                                    stats["manual"] += 1
+                        
+                        # Commit immédiatement pour cette session
+                        await session.commit()
+                        
+                        # Incrémenter le compteur et émettre progression périodiquement
+                        if processed_counter is not None:
+                            async with stats_lock:
+                                processed_counter["count"] += 1
+                                count = processed_counter["count"]
+                                total = processed_counter["total"]
+                                
+                                # Émettre progression tous les N fichiers
+                                if event_manager and count % self.SSE_UPDATE_FREQUENCY == 0:
+                                    await event_manager.emit_scan_progress(count, total, f"{count}/{total} fichiers traités")
+                        
+                        return media_file, created
+                        
+                    except Exception as e:
+                        print(f"ERROR processing {file_path}: {e}")
+                        return None, False
         
         # Traiter tous les fichiers du batch en parallèle
         tasks = [process_single(fp, ft) for fp, ft in files_batch]
@@ -518,32 +522,29 @@ class MediaScanner:
         stats_lock = asyncio.Lock()
         processed_counter = {"count": 0, "total": len(video_files)}
         
-        async with async_session() as session:
-            # Traiter par batches pour commit périodique
-            BATCH_SIZE = 100
+        # Traiter par batches
+        BATCH_SIZE = 100
+        
+        for i in range(0, len(video_files), BATCH_SIZE):
+            batch = video_files[i:i + BATCH_SIZE]
             
-            for i in range(0, len(video_files), BATCH_SIZE):
-                batch = video_files[i:i + BATCH_SIZE]
-                
-                await self._process_batch(
-                    session=session,
-                    files_batch=batch,
-                    semaphore=semaphore,
-                    stats=stats,
-                    stats_lock=stats_lock,
-                    event_manager=event_manager,
-                    processed_counter=processed_counter
-                )
-                
-                # Commit après chaque batch
-                await session.commit()
-                
-                # Émettre stats mises à jour après chaque batch
-                if event_manager:
+            await self._process_batch(
+                files_batch=batch,
+                semaphore=semaphore,
+                stats=stats,
+                stats_lock=stats_lock,
+                event_manager=event_manager,
+                processed_counter=processed_counter
+            )
+            
+            # Émettre stats mises à jour après chaque batch
+            if event_manager:
+                async with async_session() as session:
                     current_stats = await self.get_stats(session)
                     await event_manager.emit_stats_updated(current_stats)
-            
-            # Nettoyer les fichiers supprimés (sources qui n'existent plus)
+        
+        # Nettoyer les fichiers supprimés (sources qui n'existent plus)
+        async with async_session() as session:
             deleted_count = await self.cleanup_deleted_files(session, event_manager)
             stats["deleted"] = deleted_count
             

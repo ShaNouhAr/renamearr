@@ -549,6 +549,7 @@ async def reprocess_file(file_id: int, session: AsyncSession = Depends(get_sessi
     
     # Retraiter
     media_file = await media_scanner.process_file(session, media_file)
+    await session.commit()
     
     # Émettre événement de mise à jour
     await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))

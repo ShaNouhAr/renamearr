@@ -158,12 +158,40 @@ class MediaParser:
         """Parse un chemin de fichier complet.
         
         Essaie d'abord avec le nom du fichier, puis avec le dossier parent
-        si le parsing échoue.
+        si le parsing échoue ou si c'est une série avec un titre suspect.
         """
         # D'abord essayer avec le nom du fichier
         parsed = self.parse(file_path.stem)
         
-        # Si on n'a pas de titre, essayer avec le dossier parent
+        # Pour les séries, le dossier parent contient souvent un meilleur titre
+        # (ex: "Les.Simpson.S17" au lieu de "Les Simpson-Le fils a maman")
+        should_use_parent = False
+        
+        if parsed.media_type == MediaType.TV and file_path.parent.name:
+            parent_parsed = self.parse(file_path.parent.name)
+            
+            # Utiliser le parent si:
+            # 1. Le titre du fichier contient le titre du parent (probable nom d'épisode ajouté)
+            # 2. Le titre du parent est plus court et plus propre
+            if parent_parsed.title and parsed.title:
+                parent_clean = parent_parsed.title.lower().replace(' ', '')
+                file_clean = parsed.title.lower().replace(' ', '')
+                
+                # Si le titre parent est contenu dans le titre fichier, c'est probablement
+                # que le titre fichier inclut le nom de l'épisode
+                if parent_clean and file_clean.startswith(parent_clean[:min(10, len(parent_clean))]):
+                    should_use_parent = True
+                # Ou si le titre fichier est beaucoup plus long (inclut description épisode)
+                elif len(parsed.title) > len(parent_parsed.title) * 1.5:
+                    should_use_parent = True
+            
+            if should_use_parent and parent_parsed.title:
+                # Garder saison/épisode du fichier mais titre du parent
+                parsed.title = parent_parsed.title
+                if parent_parsed.year:
+                    parsed.year = parent_parsed.year
+        
+        # Si on n'a toujours pas de titre, essayer avec le dossier parent
         if not parsed.title and file_path.parent.name:
             parent_parsed = self.parse(file_path.parent.name)
             if parent_parsed.title:
