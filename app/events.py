@@ -14,6 +14,9 @@ class EventType(str, Enum):
     SCAN_PROGRESS = "scan_progress"
     SCAN_COMPLETED = "scan_completed"
     STATS_UPDATED = "stats_updated"
+    REPROCESS_STARTED = "reprocess_started"
+    REPROCESS_PROGRESS = "reprocess_progress"
+    REPROCESS_COMPLETED = "reprocess_completed"
 
 
 @dataclass
@@ -76,6 +79,23 @@ class EventManager:
     async def emit_scan_completed(self, stats: dict):
         """Émet un événement de fin de scan."""
         await self.emit(EventType.SCAN_COMPLETED, stats)
+    
+    async def emit_reprocess_started(self, total: int):
+        """Émet un événement de début de retraitement."""
+        await self.emit(EventType.REPROCESS_STARTED, {"total": total})
+    
+    async def emit_reprocess_progress(self, current: int, total: int, linked: int, filename: str):
+        """Émet un événement de progression du retraitement."""
+        await self.emit(EventType.REPROCESS_PROGRESS, {
+            "current": current,
+            "total": total,
+            "linked": linked,
+            "filename": filename
+        })
+    
+    async def emit_reprocess_completed(self, stats: dict):
+        """Émet un événement de fin de retraitement."""
+        await self.emit(EventType.REPROCESS_COMPLETED, stats)
 
 
 # Instance globale

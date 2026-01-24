@@ -27,21 +27,14 @@ class MediaScanner:
     # Fréquence des mises à jour SSE (tous les N fichiers)
     SSE_UPDATE_FREQUENCY = 50
     
-    # Patterns de fichiers à ignorer (génériques anime uniquement)
-    # Note: pas de flags inline (?i), on utilise re.IGNORECASE à la compilation
+    # Patterns de fichiers à ignorer
+    # Note: NCOP, NCED, OP, ED sont maintenant traités comme Specials (Saison 0)
     IGNORE_PATTERNS = [
-        r'creditless',          # Creditless versions (OP/ED sans crédits)
-        r'\bNCOP\b',            # No Credit Opening
-        r'\bNCED\b',            # No Credit Ending
+        # Plus rien à ignorer pour l'instant - les spéciaux sont gérés par le parser
     ]
     
-    # Patterns spécifiques pour OP/ED qui ne sont pas des épisodes
-    # Format: "ED1 Creditless", "OP2", "ED Creditless" etc (pas S01E01)
-    OPED_PATTERN = r'^(?:.*\s)?(?:OP|ED)\d*(?:\s|v\d|$)'
-    
     def __init__(self):
-        self._ignore_regex = re.compile('|'.join(self.IGNORE_PATTERNS), re.IGNORECASE)
-        self._oped_regex = re.compile(self.OPED_PATTERN, re.IGNORECASE)
+        self._ignore_regex = re.compile('|'.join(self.IGNORE_PATTERNS) if self.IGNORE_PATTERNS else r'(?!)', re.IGNORECASE)
     
     @property
     def source_mode(self) -> str:
@@ -68,17 +61,9 @@ class MediaScanner:
         return config_manager.get_min_video_size()
     
     def should_ignore_file(self, filename: str) -> bool:
-        """Vérifie si un fichier doit être ignoré (extras, creditless, etc.)."""
-        # Si c'est un vrai épisode (S01E01), ne pas ignorer
-        if re.search(r'S\d{1,2}E\d{1,2}', filename, re.IGNORECASE):
-            return False
-        
-        # Vérifier les patterns généraux d'ignorance
-        if self._ignore_regex.search(filename):
-            return True
-        
-        # Vérifier les patterns OP/ED spécifiques (qui ne sont pas des épisodes)
-        if self._oped_regex.search(filename):
+        """Vérifie si un fichier doit être ignoré."""
+        # Vérifier les patterns généraux d'ignorance (actuellement vide)
+        if self.IGNORE_PATTERNS and self._ignore_regex.search(filename):
             return True
         
         return False

@@ -574,6 +574,11 @@ async def reprocess_all_files(session: AsyncSession = Depends(get_session)):
     count = len(files_to_reprocess)
     processed = 0
     linked = 0
+    still_manual = 0
+    still_failed = 0
+    
+    # Émettre événement de début
+    await event_manager.emit_reprocess_started(count)
     
     for media_file in files_to_reprocess:
         # Supprimer l'ancien lien si existant
@@ -603,25 +608,48 @@ async def reprocess_all_files(session: AsyncSession = Depends(get_session)):
         
         # Retraiter
         media_file = await media_scanner.process_file(session, media_file)
+        await session.commit()
         processed += 1
         
         if media_file.status == ProcessingStatus.LINKED:
             linked += 1
+        elif media_file.status == ProcessingStatus.MANUAL:
+            still_manual += 1
+        elif media_file.status == ProcessingStatus.FAILED:
+            still_failed += 1
         
-        # Émettre événement de mise à jour
+        # Émettre événement de progression
+        await event_manager.emit_reprocess_progress(
+            current=processed,
+            total=count,
+            linked=linked,
+            filename=media_file.source_filename
+        )
+        
+        # Émettre événement de mise à jour du fichier
         await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
-    
-    await session.commit()
     
     # Émettre stats mises à jour
     stats = await media_scanner.get_stats(session)
     await event_manager.emit_stats_updated(stats)
     
+    # Émettre événement de fin
+    result_stats = {
+        "total": count,
+        "processed": processed,
+        "linked": linked,
+        "still_manual": still_manual,
+        "still_failed": still_failed
+    }
+    await event_manager.emit_reprocess_completed(result_stats)
+    
     return {
         "message": f"{processed} fichiers retraités, {linked} liés",
         "total": count,
         "processed": processed,
-        "linked": linked
+        "linked": linked,
+        "still_manual": still_manual,
+        "still_failed": still_failed
     }
 
 
@@ -680,9 +708,14 @@ async def manual_match(
     # Supprimer l'ancien lien si existant
     if media_file.destination_path:
         file_linker.remove_link(Path(media_file.destination_path))
+        media_file.destination_path = None
     
     # Créer le nouveau lien
     media_file = await media_scanner.create_link(session, media_file)
+    
+    # IMPORTANT: Sauvegarder les changements après create_link
+    await session.commit()
+    await session.refresh(media_file)
     
     # Émettre événement de mise à jour
     await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
@@ -803,6 +836,8 @@ async def process_pending(session: AsyncSession = Depends(get_session)):
 @router.post("/retry-failed")
 async def retry_failed(session: AsyncSession = Depends(get_session)):
     """Retraite tous les fichiers en échec ou manuels."""
+    from app.services.parser import parser
+    
     # Récupérer les fichiers en échec, manuels et en attente
     result = await session.execute(
         select(MediaFile).where(
@@ -815,37 +850,77 @@ async def retry_failed(session: AsyncSession = Depends(get_session)):
     )
     files_to_retry = result.scalars().all()
     
+    count = len(files_to_retry)
     processed = 0
     linked = 0
     still_failed = 0
+    still_manual = 0
+    
+    # Émettre événement de début
+    await event_manager.emit_reprocess_started(count)
     
     for media_file in files_to_retry:
-        # Réinitialiser le statut
-        media_file.status = ProcessingStatus.PENDING
-        media_file.error_message = None
-        
         # Supprimer l'ancien lien si existant
         if media_file.destination_path:
             file_linker.remove_link(Path(media_file.destination_path))
             media_file.destination_path = None
         
-        await session.commit()
+        # Re-parser le nom du fichier
+        file_path = Path(media_file.source_path)
+        parsed = parser.parse_path(file_path)
+        
+        # Mettre à jour les valeurs parsées
+        media_file.parsed_title = parsed.title
+        media_file.parsed_year = parsed.year
+        media_file.parsed_season = parsed.season
+        media_file.parsed_episode = parsed.episode
+        if parsed.media_type != MediaType.UNKNOWN:
+            media_file.media_type = parsed.media_type
+        
+        # Réinitialiser le statut
+        media_file.status = ProcessingStatus.PENDING
+        media_file.error_message = None
+        media_file.tmdb_id = None
+        media_file.tmdb_title = None
+        media_file.tmdb_year = None
+        media_file.tmdb_poster = None
         
         # Retraiter
         media_file = await media_scanner.process_file(session, media_file)
+        await session.commit()
         processed += 1
-        
-        # Émettre événement de mise à jour
-        await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
         
         if media_file.status == ProcessingStatus.LINKED:
             linked += 1
-        elif media_file.status in [ProcessingStatus.FAILED, ProcessingStatus.MANUAL]:
+        elif media_file.status == ProcessingStatus.MANUAL:
+            still_manual += 1
+        elif media_file.status == ProcessingStatus.FAILED:
             still_failed += 1
+        
+        # Émettre événement de progression
+        await event_manager.emit_reprocess_progress(
+            current=processed,
+            total=count,
+            linked=linked,
+            filename=media_file.source_filename
+        )
+        
+        # Émettre événement de mise à jour du fichier
+        await event_manager.emit_file_updated(media_scanner.file_to_dict(media_file))
     
     # Émettre stats mises à jour
     stats = await media_scanner.get_stats(session)
     await event_manager.emit_stats_updated(stats)
+    
+    # Émettre événement de fin
+    result_stats = {
+        "total": count,
+        "processed": processed,
+        "linked": linked,
+        "still_manual": still_manual,
+        "still_failed": still_failed
+    }
+    await event_manager.emit_reprocess_completed(result_stats)
     
     return {
         "message": "Retraitement terminé",

@@ -328,6 +328,15 @@ function handleSSEEvent(type, data) {
         case 'scan_completed':
             handleScanCompleted(data);
             break;
+        case 'reprocess_started':
+            handleReprocessStarted(data);
+            break;
+        case 'reprocess_progress':
+            handleReprocessProgress(data);
+            break;
+        case 'reprocess_completed':
+            handleReprocessCompleted(data);
+            break;
     }
 }
 
@@ -955,32 +964,86 @@ async function ignoreFile(fileId) {
     }
 }
 
-async function retryAllFailed() {
+let isReprocessing = false;
+
+function handleReprocessStarted(data) {
+    isReprocessing = true;
     const btn = document.querySelector('.btn-secondary[onclick="retryAllFailed()"]');
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = `
-            <div class="spinner-small"></div>
-            Retraitement...
+            <div class="reprocess-progress-container">
+                <div class="reprocess-progress-bar" style="width: 0%"></div>
+            </div>
+            <span class="reprocess-text">0/${data.total}</span>
+        `;
+        btn.classList.add('btn-progress');
+    }
+}
+
+function handleReprocessProgress(data) {
+    const btn = document.querySelector('.btn-secondary[onclick="retryAllFailed()"]');
+    if (btn) {
+        const percent = Math.round((data.current / data.total) * 100);
+        const progressBar = btn.querySelector('.reprocess-progress-bar');
+        const progressText = btn.querySelector('.reprocess-text');
+        
+        if (progressBar) {
+            progressBar.style.width = `${percent}%`;
+        }
+        if (progressText) {
+            progressText.textContent = `${data.current}/${data.total} (${data.linked} liés)`;
+        }
+    }
+}
+
+function handleReprocessCompleted(data) {
+    isReprocessing = false;
+    const btn = document.querySelector('.btn-secondary[onclick="retryAllFailed()"]');
+    if (btn) {
+        btn.disabled = false;
+        btn.classList.remove('btn-progress');
+        btn.innerHTML = `
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 2v6h-6"/>
+                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+                <path d="M3 22v-6h6"/>
+                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+            </svg>
+            Réessayer
         `;
     }
     
+    let message = `Retraitement terminé: ${data.linked}/${data.total} liés`;
+    if (data.still_manual > 0) {
+        message += `, ${data.still_manual} manuel(s)`;
+    }
+    if (data.still_failed > 0) {
+        message += `, ${data.still_failed} échec(s)`;
+    }
+    showToast(message, data.linked > 0 ? 'success' : 'warning');
+    
+    loadFiles();
+}
+
+async function retryAllFailed() {
+    if (isReprocessing) {
+        showToast('Retraitement déjà en cours', 'warning');
+        return;
+    }
+    
     try {
-        showToast('Retraitement en cours...', 'info');
-        const result = await api('/retry-failed', { method: 'POST' });
-        
-        let message = `Retraitement terminé: ${result.linked} liés`;
-        if (result.still_failed > 0) {
-            message += `, ${result.still_failed} toujours en échec`;
-        }
-        showToast(message, result.linked > 0 ? 'success' : 'warning');
-        
-        await loadFiles();
+        // Les événements SSE géreront l'affichage de la progression
+        await api('/files/reprocess-all', { method: 'POST' });
     } catch (error) {
         showToast(`Erreur: ${error.message}`, 'error');
-    } finally {
+        isReprocessing = false;
+        
+        // Restaurer le bouton en cas d'erreur
+        const btn = document.querySelector('.btn-secondary[onclick="retryAllFailed()"]');
         if (btn) {
             btn.disabled = false;
+            btn.classList.remove('btn-progress');
             btn.innerHTML = `
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 2v6h-6"/>
@@ -1067,61 +1130,123 @@ function openManualMatchWithFile(file) {
     const title = document.getElementById('modal-title');
     const body = document.getElementById('modal-body');
     
-    title.textContent = 'Correction manuelle';
+    title.textContent = 'Corriger l\'association';
     body.innerHTML = `
-        <div class="modal-form">
-            <div class="form-group">
-                <label>Fichier source</label>
-                <input type="text" value="${escapeHtml(file.source_filename)}" disabled>
-            </div>
-            
-            <div class="form-row">
-                <div class="form-group">
-                    <label>Type de média</label>
-                    <select id="match-type" onchange="onMediaTypeChange()">
-                        <option value="movie" ${file.media_type === 'movie' ? 'selected' : ''}>Film</option>
-                        <option value="tv" ${file.media_type === 'tv' ? 'selected' : ''}>Série</option>
-                    </select>
+        <div class="match-modal">
+            <!-- Header avec infos du fichier -->
+            <div class="match-file-info">
+                <div class="match-file-icon">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                    </svg>
                 </div>
-                <div class="form-group">
-                    <label>Année (optionnel)</label>
-                    <input type="number" id="match-year" value="${file.parsed_year || ''}" placeholder="2024">
+                <div class="match-file-details">
+                    <span class="match-file-name">${escapeHtml(file.source_filename)}</span>
+                    <span class="match-file-path">${escapeHtml(file.source_path?.split('/').slice(0, -1).join('/') || '')}</span>
                 </div>
             </div>
             
-            <div id="season-episode-fields" style="display: ${file.media_type === 'tv' ? 'block' : 'none'};">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Saison</label>
-                        <input type="number" id="match-season" value="${file.parsed_season || 1}" min="0">
+            <!-- Zone de recherche principale -->
+            <div class="match-search-container">
+                <div class="match-search-box">
+                    <svg class="match-search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input type="text" id="match-search" value="${escapeHtml(file.parsed_title || '')}" 
+                           placeholder="Rechercher un film ou une série..." 
+                           onkeyup="debounceSearchTmdb()" autocomplete="off">
+                    <div class="match-search-loader" id="search-loader"></div>
+                </div>
+                
+                <div class="match-filters">
+                    <div class="match-filter-group">
+                        <button class="match-type-btn ${file.media_type !== 'tv' ? 'active' : ''}" data-type="movie" onclick="setMatchType('movie')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                                <line x1="7" y1="2" x2="7" y2="22"/>
+                                <line x1="17" y1="2" x2="17" y2="22"/>
+                                <line x1="2" y1="12" x2="22" y2="12"/>
+                            </svg>
+                            Film
+                        </button>
+                        <button class="match-type-btn ${file.media_type === 'tv' ? 'active' : ''}" data-type="tv" onclick="setMatchType('tv')">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="7" width="20" height="15" rx="2" ry="2"/>
+                                <polyline points="17 2 12 7 7 2"/>
+                            </svg>
+                            Série
+                        </button>
                     </div>
-                    <div class="form-group">
-                        <label>Épisode</label>
-                        <input type="number" id="match-episode" value="${file.parsed_episode || 1}" min="0">
-                    </div>
+                    <input type="number" id="match-year" class="match-year-input" value="${file.parsed_year || ''}" 
+                           placeholder="Année" onchange="debounceSearchTmdb()">
                 </div>
             </div>
             
-            <div class="form-group">
-                <label>Rechercher sur TMDB</label>
-                <input type="text" id="match-search" value="${escapeHtml(file.parsed_title || '')}" 
-                       placeholder="Titre du film ou de la série" onkeyup="debounceSearchTmdb()">
+            <!-- Champs saison/épisode pour les séries -->
+            <div id="season-episode-fields" class="match-episode-fields ${file.media_type === 'tv' ? 'visible' : ''}">
+                <div class="match-episode-group">
+                    <label>Saison</label>
+                    <input type="number" id="match-season" value="${file.parsed_season || 1}" min="0">
+                </div>
+                <div class="match-episode-group">
+                    <label>Épisode</label>
+                    <input type="number" id="match-episode" value="${file.parsed_episode || 1}" min="0">
+                </div>
             </div>
             
-            <div id="tmdb-results" class="tmdb-results">
-                <!-- Résultats TMDB -->
+            <!-- Résultats TMDB en grille -->
+            <div id="tmdb-results" class="tmdb-results-grid">
+                <div class="tmdb-results-placeholder">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <p>Commencez à taper pour rechercher</p>
+                </div>
             </div>
             
-            <div style="display: flex; gap: var(--spacing-md); justify-content: flex-end; margin-top: var(--spacing-md);">
-                <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
-                <button class="btn btn-primary" onclick="submitManualMatch()" id="submit-match-btn" disabled>
-                    Appliquer
+            <!-- Aperçu de la sélection -->
+            <div id="match-preview" class="match-preview" style="display: none;">
+                <div class="match-preview-poster" id="preview-poster"></div>
+                <div class="match-preview-info">
+                    <h3 id="preview-title"></h3>
+                    <div class="match-preview-meta">
+                        <span class="badge" id="preview-year"></span>
+                        <span class="badge" id="preview-type"></span>
+                    </div>
+                    <p id="preview-overview"></p>
+                </div>
+            </div>
+            
+            <!-- Actions -->
+            <div class="match-actions">
+                <button class="btn btn-ghost" onclick="closeModal()">Annuler</button>
+                <button class="btn btn-primary btn-glow" onclick="submitManualMatch()" id="submit-match-btn" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    Appliquer la correction
                 </button>
             </div>
         </div>
     `;
     
+    // Stocker le type actuel
+    document.getElementById('modal-overlay').dataset.matchType = file.media_type || 'movie';
+    
+    // Ajouter classe pour agrandir la modal
+    modal.querySelector('.modal')?.classList.add('modal-match');
+    
     modal.classList.add('active');
+    
+    // Focus sur le champ de recherche
+    setTimeout(() => {
+        document.getElementById('match-search')?.focus();
+    }, 100);
     
     // Rechercher automatiquement avec le titre parsé
     if (file.parsed_title) {
@@ -1129,98 +1254,220 @@ function openManualMatchWithFile(file) {
     }
 }
 
-function onMediaTypeChange() {
-    const type = document.getElementById('match-type').value;
-    const fields = document.getElementById('season-episode-fields');
-    fields.style.display = type === 'tv' ? 'block' : 'none';
+function setMatchType(type) {
+    const modal = document.getElementById('modal-overlay');
+    modal.dataset.matchType = type;
     
-    // Relancer la recherche avec le nouveau type
-    searchTmdb();
+    // Mettre à jour les boutons
+    document.querySelectorAll('.match-type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+    });
+    
+    // Afficher/masquer les champs saison/épisode
+    const fields = document.getElementById('season-episode-fields');
+    fields.classList.toggle('visible', type === 'tv');
+    
+    // Relancer la recherche
+    debounceSearchTmdb();
 }
 
 let tmdbSearchTimeout = null;
+let tmdbCache = {};
+
 function debounceSearchTmdb() {
     clearTimeout(tmdbSearchTimeout);
-    tmdbSearchTimeout = setTimeout(searchTmdb, 300);
+    
+    // Afficher le loader
+    const loader = document.getElementById('search-loader');
+    if (loader) loader.classList.add('active');
+    
+    tmdbSearchTimeout = setTimeout(searchTmdb, 350);
 }
 
 async function searchTmdb() {
-    const query = document.getElementById('match-search').value;
-    const year = document.getElementById('match-year').value;
-    const type = document.getElementById('match-type').value;
+    const query = document.getElementById('match-search')?.value;
+    const year = document.getElementById('match-year')?.value;
+    const modal = document.getElementById('modal-overlay');
+    const type = modal?.dataset?.matchType || 'movie';
+    const loader = document.getElementById('search-loader');
+    const container = document.getElementById('tmdb-results');
     
-    if (!query) {
-        document.getElementById('tmdb-results').innerHTML = '';
+    if (!query || query.length < 2) {
+        if (loader) loader.classList.remove('active');
+        if (container) {
+            container.innerHTML = `
+                <div class="tmdb-results-placeholder">
+                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <circle cx="11" cy="11" r="8"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <p>Tapez au moins 2 caractères pour rechercher</p>
+                </div>
+            `;
+        }
         return;
     }
     
+    // Clé de cache
+    const cacheKey = `${query}_${type}_${year || ''}`;
+    
     try {
-        let url = `/tmdb/search?query=${encodeURIComponent(query)}&media_type=${type}`;
-        if (year) url += `&year=${year}`;
+        let results;
         
-        const results = await api(url);
+        if (tmdbCache[cacheKey]) {
+            results = tmdbCache[cacheKey];
+        } else {
+            let url = `/tmdb/search?query=${encodeURIComponent(query)}&media_type=${type}`;
+            if (year) url += `&year=${year}`;
+            
+            results = await api(url);
+            tmdbCache[cacheKey] = results;
+        }
+        
         renderTmdbResults(results);
     } catch (error) {
-        document.getElementById('tmdb-results').innerHTML = `
-            <p style="color: var(--error);">Erreur de recherche: ${error.message}</p>
-        `;
+        if (container) {
+            container.innerHTML = `
+                <div class="tmdb-results-error">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="15" y1="9" x2="9" y2="15"/>
+                        <line x1="9" y1="9" x2="15" y2="15"/>
+                    </svg>
+                    <p>Erreur de recherche: ${error.message}</p>
+                </div>
+            `;
+        }
+    } finally {
+        if (loader) loader.classList.remove('active');
     }
 }
 
 function renderTmdbResults(results) {
     const container = document.getElementById('tmdb-results');
+    if (!container) return;
     
     if (results.length === 0) {
-        container.innerHTML = '<p style="color: var(--text-muted);">Aucun résultat trouvé</p>';
+        container.innerHTML = `
+            <div class="tmdb-results-empty">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M8 15h8"/>
+                    <circle cx="9" cy="9" r="1" fill="currentColor"/>
+                    <circle cx="15" cy="9" r="1" fill="currentColor"/>
+                </svg>
+                <p>Aucun résultat trouvé</p>
+                <span>Essayez avec un autre titre ou vérifiez l'orthographe</span>
+            </div>
+        `;
         return;
     }
     
-    container.innerHTML = results.map(result => `
-        <div class="tmdb-result" onclick="selectTmdbResult(${result.id}, '${result.media_type}')" 
-             data-id="${result.id}" data-type="${result.media_type}">
-            <div class="tmdb-result-poster">
-                ${result.poster_path 
-                    ? `<img src="${result.poster_path}" alt="Poster" loading="lazy">`
-                    : ''}
-            </div>
-            <div class="tmdb-result-info">
-                <div class="tmdb-result-title">${escapeHtml(result.title)}</div>
-                <div class="tmdb-result-year">
-                    ${result.year || 'N/A'} · 
-                    <span class="badge badge-${result.media_type}">${getMediaTypeLabel(result.media_type)}</span>
+    container.innerHTML = `
+        <div class="tmdb-grid">
+            ${results.map(result => `
+                <div class="tmdb-card ${selectedTmdbResult?.id === result.id ? 'selected' : ''}" 
+                     onclick="selectTmdbResult(${result.id}, '${result.media_type}', this)"
+                     data-id="${result.id}" 
+                     data-type="${result.media_type}"
+                     data-title="${escapeHtml(result.title)}"
+                     data-year="${result.year || ''}"
+                     data-overview="${escapeHtml(result.overview || '')}"
+                     data-poster="${result.poster_path || ''}">
+                    <div class="tmdb-card-poster">
+                        ${result.poster_path 
+                            ? `<img src="${result.poster_path}" alt="${escapeHtml(result.title)}" loading="lazy">`
+                            : `<div class="tmdb-card-no-poster">
+                                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                     <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+                                     <line x1="7" y1="2" x2="7" y2="22"/>
+                                     <line x1="17" y1="2" x2="17" y2="22"/>
+                                 </svg>
+                               </div>`
+                        }
+                        <div class="tmdb-card-overlay">
+                            <span class="tmdb-card-check">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                                    <polyline points="20 6 9 17 4 12"/>
+                                </svg>
+                            </span>
+                        </div>
+                    </div>
+                    <div class="tmdb-card-info">
+                        <span class="tmdb-card-title">${escapeHtml(result.title)}</span>
+                        <div class="tmdb-card-meta">
+                            <span class="tmdb-card-year">${result.year || '—'}</span>
+                            <span class="tmdb-card-type badge-${result.media_type}">${getMediaTypeLabel(result.media_type)}</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="tmdb-result-overview">${escapeHtml(result.overview || '')}</div>
-            </div>
+            `).join('')}
         </div>
-    `).join('');
+    `;
 }
 
-function selectTmdbResult(tmdbId, mediaType) {
+function selectTmdbResult(tmdbId, mediaType, element) {
     // Désélectionner l'ancien
-    document.querySelectorAll('.tmdb-result').forEach(el => el.classList.remove('selected'));
+    document.querySelectorAll('.tmdb-card').forEach(el => el.classList.remove('selected'));
     
     // Sélectionner le nouveau
-    const selected = document.querySelector(`.tmdb-result[data-id="${tmdbId}"]`);
-    if (selected) {
-        selected.classList.add('selected');
+    if (element) {
+        element.classList.add('selected');
     }
     
     selectedTmdbResult = { id: tmdbId, media_type: mediaType };
     
-    // Mettre à jour le type si différent
-    document.getElementById('match-type').value = mediaType;
-    onMediaTypeChange();
+    // Mettre à jour le type
+    setMatchType(mediaType);
+    
+    // Afficher l'aperçu
+    const preview = document.getElementById('match-preview');
+    if (preview && element) {
+        const title = element.dataset.title;
+        const year = element.dataset.year;
+        const overview = element.dataset.overview;
+        const poster = element.dataset.poster;
+        
+        document.getElementById('preview-poster').innerHTML = poster 
+            ? `<img src="${poster}" alt="${escapeHtml(title)}">`
+            : `<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                 <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"/>
+               </svg>`;
+        document.getElementById('preview-title').textContent = title;
+        document.getElementById('preview-year').textContent = year || '—';
+        document.getElementById('preview-type').textContent = getMediaTypeLabel(mediaType);
+        document.getElementById('preview-type').className = `badge badge-${mediaType}`;
+        document.getElementById('preview-overview').textContent = overview || 'Pas de description disponible.';
+        
+        preview.style.display = 'flex';
+        preview.classList.add('visible');
+    }
     
     // Activer le bouton
     document.getElementById('submit-match-btn').disabled = false;
 }
 
 async function submitManualMatch() {
-    if (!selectedFile || !selectedTmdbResult) return;
+    if (!selectedFile || !selectedTmdbResult) {
+        showToast('Veuillez sélectionner un média', 'warning');
+        return;
+    }
     
-    const mediaType = document.getElementById('match-type').value;
+    // Récupérer le type depuis le dataset de la modal ou depuis selectedTmdbResult
+    const modal = document.getElementById('modal-overlay');
+    const mediaType = selectedTmdbResult.media_type || modal?.dataset?.matchType || 'movie';
     const season = document.getElementById('match-season')?.value;
     const episode = document.getElementById('match-episode')?.value;
+    
+    // Désactiver le bouton pendant le traitement
+    const submitBtn = document.getElementById('submit-match-btn');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = `
+            <div class="spinner-small"></div>
+            Application...
+        `;
+    }
     
     try {
         const body = {
@@ -1245,13 +1492,27 @@ async function submitManualMatch() {
         await loadFiles();
     } catch (error) {
         showToast(`Erreur: ${error.message}`, 'error');
+        
+        // Réactiver le bouton
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = `
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                Appliquer la correction
+            `;
+        }
     }
 }
 
 function closeModal() {
-    document.getElementById('modal-overlay').classList.remove('active');
+    const modal = document.getElementById('modal-overlay');
+    modal.classList.remove('active');
+    modal.querySelector('.modal')?.classList.remove('modal-match');
     selectedFile = null;
     selectedTmdbResult = null;
+    tmdbCache = {}; // Vider le cache TMDB
 }
 
 // ============================================

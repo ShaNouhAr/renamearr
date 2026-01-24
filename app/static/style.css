@@ -725,11 +725,16 @@ body::before {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     width: 90%;
-    max-width: 700px;
+    max-width: 800px;
     max-height: 90vh;
     overflow: hidden;
     transform: scale(0.9) translateY(20px);
     transition: transform var(--transition-normal);
+}
+
+/* Modal large pour la correction manuelle */
+.modal.modal-match {
+    max-width: 900px;
 }
 
 .modal-overlay.active .modal {
@@ -797,76 +802,485 @@ body::before {
     border-color: var(--accent-primary);
 }
 
-/* TMDB Results */
-.tmdb-results {
+/* ============================================
+   Manual Match Modal - Plex-like Interface
+   ============================================ */
+
+.match-modal {
     display: flex;
     flex-direction: column;
-    gap: var(--spacing-sm);
-    margin-top: var(--spacing-md);
+    gap: var(--spacing-lg);
+    max-height: 80vh;
 }
 
-.tmdb-result {
+/* File Info Header */
+.match-file-info {
     display: flex;
+    align-items: center;
     gap: var(--spacing-md);
-    padding: var(--spacing-sm);
+    padding: var(--spacing-md);
     background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    cursor: pointer;
-    transition: all var(--transition-fast);
+    border-left: 3px solid var(--accent-primary);
 }
 
-.tmdb-result:hover {
-    background: var(--bg-hover);
-    border-color: var(--accent-primary);
-}
-
-.tmdb-result.selected {
-    border-color: var(--accent-primary);
-    background: rgba(230, 57, 70, 0.1);
-}
-
-.tmdb-result-poster {
-    width: 50px;
-    height: 75px;
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    background: var(--bg-primary);
+.match-file-icon {
+    color: var(--text-muted);
     flex-shrink: 0;
 }
 
-.tmdb-result-poster img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.tmdb-result-info {
+.match-file-details {
     display: flex;
     flex-direction: column;
-    gap: 2px;
     min-width: 0;
 }
 
-.tmdb-result-title {
+.match-file-name {
     font-weight: 500;
+    font-size: 0.9rem;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.tmdb-result-year {
+.match-file-path {
     font-size: 0.75rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Search Container */
+.match-search-container {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.match-search-box {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.match-search-icon {
+    position: absolute;
+    left: var(--spacing-md);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.match-search-box input {
+    width: 100%;
+    padding: var(--spacing-md) var(--spacing-md) var(--spacing-md) 48px;
+    font-size: 1rem;
+    background: var(--bg-tertiary);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    color: var(--text-primary);
+    transition: all var(--transition-fast);
+}
+
+.match-search-box input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.match-search-box input::placeholder {
     color: var(--text-muted);
 }
 
-.tmdb-result-overview {
+.match-search-loader {
+    position: absolute;
+    right: var(--spacing-md);
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent-primary);
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.match-search-loader.active {
+    opacity: 1;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Filters */
+.match-filters {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.match-filter-group {
+    display: flex;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    padding: 4px;
+    gap: 4px;
+}
+
+.match-type-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 500;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.match-type-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+.match-type-btn.active {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.match-year-input {
+    width: 100px;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 0.85rem;
+}
+
+.match-year-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+/* Season/Episode Fields */
+.match-episode-fields {
+    display: none;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    animation: slideDown var(--transition-fast);
+}
+
+.match-episode-fields.visible {
+    display: flex;
+}
+
+@keyframes slideDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.match-episode-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.match-episode-group label {
     font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.match-episode-group input {
+    width: 80px;
+    padding: var(--spacing-sm);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    text-align: center;
+    font-size: 1rem;
+}
+
+/* TMDB Results Grid */
+.tmdb-results-grid {
+    min-height: 200px;
+    max-height: 350px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-light) var(--bg-tertiary);
+}
+
+.tmdb-results-grid::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tmdb-results-grid::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+    border-radius: 3px;
+}
+
+.tmdb-results-grid::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 3px;
+}
+
+.tmdb-results-placeholder,
+.tmdb-results-empty,
+.tmdb-results-error {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-xl);
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.tmdb-results-empty span,
+.tmdb-results-error span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.tmdb-results-error {
+    color: var(--error);
+}
+
+.tmdb-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: var(--spacing-md);
+    padding: var(--spacing-xs);
+}
+
+/* TMDB Card */
+.tmdb-card {
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    background: var(--bg-tertiary);
+    border: 2px solid transparent;
+    transition: all var(--transition-fast);
+}
+
+.tmdb-card:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--border-light);
+}
+
+.tmdb-card.selected {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.tmdb-card-poster {
+    position: relative;
+    aspect-ratio: 2/3;
+    background: var(--bg-primary);
+    overflow: hidden;
+}
+
+.tmdb-card-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform var(--transition-normal);
+}
+
+.tmdb-card:hover .tmdb-card-poster img {
+    transform: scale(1.05);
+}
+
+.tmdb-card-no-poster {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: var(--text-muted);
+}
+
+.tmdb-card-overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, rgba(0,0,0,0.8) 0%, transparent 50%);
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.tmdb-card.selected .tmdb-card-overlay {
+    opacity: 1;
+    background: rgba(230, 57, 70, 0.3);
+}
+
+.tmdb-card-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    background: var(--accent-primary);
+    border-radius: 50%;
+    color: white;
+    transform: scale(0);
+    transition: transform var(--transition-fast);
+}
+
+.tmdb-card.selected .tmdb-card-check {
+    transform: scale(1);
+}
+
+.tmdb-card-info {
+    padding: var(--spacing-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tmdb-card-title {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tmdb-card-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: 0.7rem;
+}
+
+.tmdb-card-year {
+    color: var(--text-muted);
+}
+
+.tmdb-card-type {
+    font-size: 0.6rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.tmdb-card-type.badge-movie {
+    background: rgba(230, 57, 70, 0.2);
+    color: var(--accent-primary);
+}
+
+.tmdb-card-type.badge-tv {
+    background: rgba(52, 152, 219, 0.2);
+    color: var(--info);
+}
+
+/* Match Preview */
+.match-preview {
+    display: none;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md);
+    background: linear-gradient(135deg, var(--bg-tertiary), var(--bg-secondary));
+    border: 1px solid var(--accent-primary);
+    border-radius: var(--radius-md);
+    animation: fadeIn var(--transition-fast);
+}
+
+.match-preview.visible {
+    display: flex;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.match-preview-poster {
+    width: 80px;
+    height: 120px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--bg-primary);
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.match-preview-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.match-preview-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    min-width: 0;
+}
+
+.match-preview-info h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.match-preview-meta {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+.match-preview-info p {
+    font-size: 0.8rem;
     color: var(--text-secondary);
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+
+/* Actions */
+.match-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--border-color);
+}
+
+.btn-glow:not(:disabled) {
+    box-shadow: 0 0 20px var(--accent-glow);
+}
+
+.btn-glow:not(:disabled):hover {
+    box-shadow: 0 0 30px var(--accent-glow);
 }
 
 /* ============================================
@@ -1871,4 +2285,40 @@ body::before {
     .form-row {
         grid-template-columns: 1fr;
     }
+}
+
+/* ============================================
+   Reprocess Progress Bar
+   ============================================ */
+
+.btn-progress {
+    position: relative;
+    overflow: hidden;
+    min-width: 180px;
+    padding: var(--spacing-sm) var(--spacing-md);
+}
+
+.reprocess-progress-container {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+}
+
+.reprocess-progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+    border-radius: var(--radius-sm);
+    transition: width 0.3s ease;
+}
+
+.reprocess-text {
+    position: relative;
+    z-index: 1;
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
