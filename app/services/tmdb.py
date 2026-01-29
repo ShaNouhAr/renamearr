@@ -13,10 +13,21 @@ class TMDBService:
     """Service pour interagir avec l'API TMDB."""
     
     def __init__(self):
-        self.api_key = settings.tmdb_api_key
         self.base_url = settings.tmdb_base_url
-        self.language = settings.tmdb_language
         self.image_base_url = "https://image.tmdb.org/t/p/w500"
+    
+    @property
+    def api_key(self) -> str:
+        """Retourne la clé API (config > env)."""
+        from app.services.config_manager import config_manager
+        config_key = config_manager.load().tmdb_api_key
+        return config_key if config_key else settings.tmdb_api_key
+    
+    @property
+    def language(self) -> str:
+        """Retourne la langue configurée."""
+        from app.services.config_manager import config_manager
+        return config_manager.load().tmdb_language or settings.tmdb_language
     
     def _get_headers(self) -> dict:
         """Retourne les headers pour les requêtes API."""

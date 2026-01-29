@@ -77,7 +77,7 @@ class FileLinker:
         self,
         title: str,
         year: Optional[int],
-        tmdb_id: int,
+        tvdb_id: int,
         season: int,
         episode: int,
         source_path: Path
@@ -153,7 +153,7 @@ class FileLinker:
         source_path: Path,
         title: str,
         year: Optional[int],
-        tmdb_id: int,
+        tvdb_id: int,
         season: int,
         episode: int
     ) -> tuple[bool, str, Optional[Path]]:
@@ -162,7 +162,7 @@ class FileLinker:
         Returns:
             Tuple (success, message, destination_path)
         """
-        destination = self.build_tv_path(title, year, tmdb_id, season, episode, source_path)
+        destination = self.build_tv_path(title, year, tvdb_id, season, episode, source_path)
         success, message = self.create_hardlink(source_path, destination)
         return success, message, destination if success else None
     

@@ -316,6 +316,31 @@
                     </div>
                     
                     <div class="config-section">
+                        <h3>🔑 Clés API (Métadonnées)</h3>
+                        <p class="config-hint">Configurez vos clés API pour identifier automatiquement les films et séries.</p>
+                        
+                        <div class="config-field">
+                            <label>🎬 Clé API TMDB (pour les films)</label>
+                            <div class="api-key-input">
+                                <input type="password" id="config-tmdb-api" placeholder="Clé API TMDB">
+                                <button class="btn btn-secondary btn-sm" onclick="testTmdb()">Tester</button>
+                            </div>
+                            <span class="connection-status" id="tmdb-status"></span>
+                            <small class="config-hint">Obtenez votre clé sur <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a></small>
+                        </div>
+                        
+                        <div class="config-field">
+                            <label>📺 Clé API TVDB (pour les séries)</label>
+                            <div class="api-key-input">
+                                <input type="password" id="config-tvdb-api" placeholder="Clé API TVDB">
+                                <button class="btn btn-secondary btn-sm" onclick="testTvdb()">Tester</button>
+                            </div>
+                            <span class="connection-status" id="tvdb-status"></span>
+                            <small class="config-hint">Obtenez votre clé sur <a href="https://thetvdb.com/dashboard/account/apikey" target="_blank">thetvdb.com</a></small>
+                        </div>
+                    </div>
+                    
+                    <div class="config-section">
                         <h3>🎬 Radarr (Films)</h3>
                         <p class="config-hint">Connectez Radarr pour utiliser son format de nommage des films.</p>
                         
@@ -402,14 +427,18 @@
                         <h3>⚙️ Options</h3>
                         
                         <div class="config-field">
-                            <label>Langue TMDB</label>
+                            <label>Langue TMDB/TVDB</label>
                             <select id="config-tmdb-language">
                                 <option value="fr-FR">Français</option>
                                 <option value="en-US">English</option>
                                 <option value="es-ES">Español</option>
                                 <option value="de-DE">Deutsch</option>
                                 <option value="it-IT">Italiano</option>
+                                <option value="ja-JP">日本語</option>
+                                <option value="ko-KR">한국어</option>
+                                <option value="zh-CN">中文</option>
                             </select>
+                            <small class="config-hint">Langue utilisée pour les titres et descriptions</small>
                         </div>
                         
                         <div class="config-field">

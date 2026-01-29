@@ -64,11 +64,17 @@ class MediaFile(Base):
     parsed_episode = Column(Integer)
     media_type = Column(SQLEnum(MediaType), default=MediaType.UNKNOWN)
     
-    # Correspondance TMDB
+    # Correspondance TMDB (pour les films)
     tmdb_id = Column(Integer)
     tmdb_title = Column(String(512))
     tmdb_year = Column(Integer)
     tmdb_poster = Column(String(512))
+    
+    # Correspondance TVDB (pour les séries)
+    tvdb_id = Column(Integer)
+    tvdb_title = Column(String(512))
+    tvdb_year = Column(Integer)
+    tvdb_poster = Column(String(512))
     
     # Destination
     destination_path = Column(String(1024))
@@ -105,6 +111,9 @@ class MediaFileUpdate(BaseModel):
     tmdb_id: Optional[int] = None
     tmdb_title: Optional[str] = None
     tmdb_year: Optional[int] = None
+    tvdb_id: Optional[int] = None
+    tvdb_title: Optional[str] = None
+    tvdb_year: Optional[int] = None
     media_type: Optional[MediaType] = None
     parsed_season: Optional[int] = None
     parsed_episode: Optional[int] = None
@@ -122,6 +131,10 @@ class MediaFileResponse(MediaFileBase):
     tmdb_title: Optional[str]
     tmdb_year: Optional[int]
     tmdb_poster: Optional[str]
+    tvdb_id: Optional[int]
+    tvdb_title: Optional[str]
+    tvdb_year: Optional[int]
+    tvdb_poster: Optional[str]
     destination_path: Optional[str]
     status: ProcessingStatus
     error_message: Optional[str]
@@ -134,7 +147,7 @@ class MediaFileResponse(MediaFileBase):
 
 
 class TMDBSearchResult(BaseModel):
-    """Résultat de recherche TMDB."""
+    """Résultat de recherche TMDB (films)."""
     id: int
     title: str
     original_title: Optional[str] = None
@@ -146,10 +159,23 @@ class TMDBSearchResult(BaseModel):
     popularity: float = 0.0
 
 
+class TVDBSearchResult(BaseModel):
+    """Résultat de recherche TVDB (séries)."""
+    id: int
+    title: str
+    original_title: Optional[str] = None
+    year: Optional[int] = None
+    overview: Optional[str] = None
+    poster_path: Optional[str] = None
+    media_type: MediaType = MediaType.TV
+    popularity: float = 0.0
+
+
 class ManualMatchRequest(BaseModel):
     """Requête pour correspondance manuelle."""
     file_id: int
-    tmdb_id: int
+    tmdb_id: Optional[int] = None  # Pour les films
+    tvdb_id: Optional[int] = None  # Pour les séries
     media_type: MediaType
     season: Optional[int] = None
     episode: Optional[int] = None

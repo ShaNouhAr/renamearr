@@ -40,8 +40,13 @@ class AppConfig(BaseModel):
     auto_scan_interval: int = Field(default=30, description="Intervalle de scan")
     auto_scan_unit: str = Field(default="minutes", description="Unité de l'intervalle: seconds ou minutes")
     
+    # Clés API
+    tmdb_api_key: str = Field(default="", description="Clé API TMDB (films)")
+    tvdb_api_key: str = Field(default="", description="Clé API TVDB (séries)")
+    
     # Options
     tmdb_language: str = Field(default="fr-FR", description="Langue TMDB")
+    tvdb_language: str = Field(default="fr-FR", description="Langue TVDB")
     min_video_size_mb: int = Field(default=50, description="Taille minimum des vidéos en MB")
     video_extensions: list[str] = Field(
         default=[".mkv", ".mp4", ".avi", ".mov", ".wmv", ".m4v", ".webm"],

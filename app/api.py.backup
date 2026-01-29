@@ -14,11 +14,10 @@ from pydantic import BaseModel
 from app.models import (
     MediaFile, MediaType, ProcessingStatus,
     MediaFileResponse, MediaFileUpdate, ManualMatchRequest,
-    TMDBSearchResult, TVDBSearchResult, ScanRequest, StatsResponse,
+    TMDBSearchResult, ScanRequest, StatsResponse,
     get_session
 )
 from app.services.tmdb import tmdb_service
-from app.services.tvdb import tvdb_service
 from app.services.scanner import media_scanner
 from app.services.linker import file_linker
 from app.services.config_manager import config_manager, AppConfig
@@ -86,10 +85,7 @@ class ConfigUpdateRequest(BaseModel):
     auto_scan_enabled: Optional[bool] = None
     auto_scan_interval: Optional[int] = None
     auto_scan_unit: Optional[str] = None
-    tmdb_api_key: Optional[str] = None
-    tvdb_api_key: Optional[str] = None
     tmdb_language: Optional[str] = None
-    tvdb_language: Optional[str] = None
     min_video_size_mb: Optional[int] = None
     video_extensions: Optional[list[str]] = None
 
@@ -172,32 +168,6 @@ async def test_sonarr():
     """Teste la connexion à Sonarr."""
     success, message = await sonarr_service.test_connection()
     return {"success": success, "message": message}
-
-
-@router.post("/config/test-tmdb")
-async def test_tmdb():
-    """Teste la connexion à TMDB."""
-    try:
-        # Essayer une recherche simple
-        results = await tmdb_service.search_movie("test", None)
-        if results is not None:
-            return {"success": True, "message": "Connexion TMDB OK"}
-        return {"success": False, "message": "Clé API invalide ou erreur"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
-
-
-@router.post("/config/test-tvdb")
-async def test_tvdb():
-    """Teste la connexion à TVDB."""
-    try:
-        # Essayer d'obtenir un token
-        token = await tvdb_service._get_token()
-        if token:
-            return {"success": True, "message": "Connexion TVDB OK"}
-        return {"success": False, "message": "Clé API invalide ou manquante"}
-    except Exception as e:
-        return {"success": False, "message": str(e)}
 
 
 class CreateFolderRequest(BaseModel):
@@ -691,7 +661,7 @@ async def manual_match(
     match: ManualMatchRequest,
     session: AsyncSession = Depends(get_session)
 ):
-    """Associe manuellement un fichier à un média TMDB (films) ou TVDB (séries)."""
+    """Associe manuellement un fichier à un média TMDB."""
     result = await session.execute(
         select(MediaFile).where(MediaFile.id == file_id)
     )
@@ -700,49 +670,29 @@ async def manual_match(
     if not media_file:
         raise HTTPException(status_code=404, detail="Fichier non trouvé")
     
+    # Récupérer les détails TMDB
     if match.media_type == MediaType.MOVIE:
-        # Pour les films, utiliser TMDB
-        if not match.tmdb_id:
-            raise HTTPException(status_code=400, detail="tmdb_id requis pour les films")
-        
         details = await tmdb_service.get_movie_details(match.tmdb_id)
-        if not details:
-            raise HTTPException(status_code=404, detail="Film TMDB non trouvé")
-        
-        media_file.tmdb_id = match.tmdb_id
-        media_file.tmdb_title = details.get("title")
-        release_date = details.get("release_date", "")
-        media_file.tmdb_year = int(release_date[:4]) if release_date else None
-        poster = details.get("poster_path")
-        media_file.tmdb_poster = f"https://image.tmdb.org/t/p/w500{poster}" if poster else None
-        # Nettoyer les champs TVDB
-        media_file.tvdb_id = None
-        media_file.tvdb_title = None
-        media_file.tvdb_year = None
-        media_file.tvdb_poster = None
-        
-    elif match.media_type == MediaType.TV:
-        # Pour les séries, utiliser TVDB
-        if not match.tvdb_id:
-            raise HTTPException(status_code=400, detail="tvdb_id requis pour les séries")
-        
-        details = await tvdb_service.get_series_details(match.tvdb_id)
-        if not details:
-            raise HTTPException(status_code=404, detail="Série TVDB non trouvée")
-        
-        media_file.tvdb_id = match.tvdb_id
-        media_file.tvdb_title = details.get("name")
-        media_file.tvdb_year = details.get("year")
-        media_file.tvdb_poster = details.get("poster")
-        # Nettoyer les champs TMDB
-        media_file.tmdb_id = None
-        media_file.tmdb_title = None
-        media_file.tmdb_year = None
-        media_file.tmdb_poster = None
+        if details:
+            media_file.tmdb_title = details.get("title")
+            release_date = details.get("release_date", "")
+            media_file.tmdb_year = int(release_date[:4]) if release_date else None
+            poster = details.get("poster_path")
+            media_file.tmdb_poster = f"https://image.tmdb.org/t/p/w500{poster}" if poster else None
     else:
-        raise HTTPException(status_code=400, detail="Type de média invalide")
+        details = await tmdb_service.get_tv_details(match.tmdb_id)
+        if details:
+            media_file.tmdb_title = details.get("name")
+            first_air = details.get("first_air_date", "")
+            media_file.tmdb_year = int(first_air[:4]) if first_air else None
+            poster = details.get("poster_path")
+            media_file.tmdb_poster = f"https://image.tmdb.org/t/p/w500{poster}" if poster else None
     
-    # Mettre à jour le type
+    if not details:
+        raise HTTPException(status_code=404, detail="Média TMDB non trouvé")
+    
+    # Mettre à jour les infos
+    media_file.tmdb_id = match.tmdb_id
     media_file.media_type = match.media_type
     
     if match.season is not None:
@@ -775,59 +725,24 @@ async def manual_match(
     return MediaFileResponse.model_validate(media_file)
 
 
-# ============== TMDB Search (pour les films) ==============
+# ============== TMDB Search ==============
 
 @router.get("/tmdb/search", response_model=list[TMDBSearchResult])
 async def search_tmdb(
     query: str,
-    year: Optional[int] = None
+    year: Optional[int] = None,
+    media_type: Optional[MediaType] = None
 ):
-    """Recherche de films sur TMDB."""
+    """Recherche sur TMDB."""
     if not query:
         return []
     
-    return await tmdb_service.search_movie(query, year)
-
-
-# ============== TVDB Search (pour les séries) ==============
-
-class TVDBSearchResultResponse(BaseModel):
-    """Résultat de recherche TVDB pour l'API."""
-    id: int
-    title: str
-    original_title: Optional[str] = None
-    year: Optional[int] = None
-    overview: Optional[str] = None
-    poster_path: Optional[str] = None
-    media_type: str = "tv"
-    popularity: float = 0.0
-
-
-@router.get("/tvdb/search", response_model=list[TVDBSearchResultResponse])
-async def search_tvdb(
-    query: str,
-    year: Optional[int] = None
-):
-    """Recherche de séries sur TVDB."""
-    if not query:
-        return []
-    
-    results = await tvdb_service.search_series(query, year)
-    
-    # Convertir en format API
-    return [
-        TVDBSearchResultResponse(
-            id=r.id,
-            title=r.title,
-            original_title=r.original_title,
-            year=r.year,
-            overview=r.overview,
-            poster_path=r.poster_path,
-            media_type="tv",
-            popularity=r.popularity,
-        )
-        for r in results
-    ]
+    if media_type == MediaType.MOVIE:
+        return await tmdb_service.search_movie(query, year)
+    elif media_type == MediaType.TV:
+        return await tmdb_service.search_tv(query, year)
+    else:
+        return await tmdb_service.search_multi(query, year)
 
 
 # ============== Scanner ==============

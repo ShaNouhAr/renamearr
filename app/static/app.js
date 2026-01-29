@@ -1317,7 +1317,13 @@ async function searchTmdb() {
         if (tmdbCache[cacheKey]) {
             results = tmdbCache[cacheKey];
         } else {
-            let url = `/tmdb/search?query=${encodeURIComponent(query)}&media_type=${type}`;
+            // Utiliser TVDB pour les séries, TMDB pour les films
+            let url;
+            if (type === 'tv') {
+                url = `/tvdb/search?query=${encodeURIComponent(query)}`;
+            } else {
+                url = `/tmdb/search?query=${encodeURIComponent(query)}`;
+            }
             if (year) url += `&year=${year}`;
             
             results = await api(url);
@@ -1472,13 +1478,16 @@ async function submitManualMatch() {
     try {
         const body = {
             file_id: selectedFile.id,
-            tmdb_id: selectedTmdbResult.id,
             media_type: mediaType,
         };
         
+        // Utiliser tvdb_id pour les séries, tmdb_id pour les films
         if (mediaType === 'tv') {
+            body.tvdb_id = selectedTmdbResult.id;
             body.season = parseInt(season) || 1;
             body.episode = parseInt(episode) || 1;
+        } else {
+            body.tmdb_id = selectedTmdbResult.id;
         }
         
         await api(`/files/${selectedFile.id}/match`, {
@@ -1608,6 +1617,10 @@ async function loadConfig() {
         document.getElementById('config-movies-path').value = config.movies_path || '';
         document.getElementById('config-tv-path').value = config.tv_path || '';
         
+        // Clés API
+        document.getElementById('config-tmdb-api').value = config.tmdb_api_key || '';
+        document.getElementById('config-tvdb-api').value = config.tvdb_api_key || '';
+        
         // Radarr
         document.getElementById('config-radarr-url').value = config.radarr_url || '';
         document.getElementById('config-radarr-api').value = config.radarr_api_key || '';
@@ -1731,6 +1744,8 @@ async function saveConfig() {
         source_tv_path: document.getElementById('config-source-tv-path').value,
         movies_path: document.getElementById('config-movies-path').value,
         tv_path: document.getElementById('config-tv-path').value,
+        tmdb_api_key: document.getElementById('config-tmdb-api').value,
+        tvdb_api_key: document.getElementById('config-tvdb-api').value,
         radarr_url: document.getElementById('config-radarr-url').value,
         radarr_api_key: document.getElementById('config-radarr-api').value,
         sonarr_url: document.getElementById('config-sonarr-url').value,
@@ -1740,6 +1755,7 @@ async function saveConfig() {
         auto_scan_interval: autoScanInterval,
         auto_scan_unit: autoScanUnit,
         tmdb_language: document.getElementById('config-tmdb-language').value,
+        tvdb_language: document.getElementById('config-tmdb-language').value,
         min_video_size_mb: parseInt(document.getElementById('config-min-size').value) || 50,
     };
     
@@ -1789,6 +1805,42 @@ async function testSonarr() {
     
     try {
         const result = await api('/config/test-sonarr', { method: 'POST' });
+        status.textContent = result.message;
+        status.className = `connection-status ${result.success ? 'success' : 'error'}`;
+    } catch (error) {
+        status.textContent = `Erreur: ${error.message}`;
+        status.className = 'connection-status error';
+    }
+}
+
+async function testTmdb() {
+    const status = document.getElementById('tmdb-status');
+    status.textContent = 'Test en cours...';
+    status.className = 'connection-status loading';
+    
+    // Sauvegarder d'abord pour que l'API ait les bonnes valeurs
+    await saveConfig();
+    
+    try {
+        const result = await api('/config/test-tmdb', { method: 'POST' });
+        status.textContent = result.message;
+        status.className = `connection-status ${result.success ? 'success' : 'error'}`;
+    } catch (error) {
+        status.textContent = `Erreur: ${error.message}`;
+        status.className = 'connection-status error';
+    }
+}
+
+async function testTvdb() {
+    const status = document.getElementById('tvdb-status');
+    status.textContent = 'Test en cours...';
+    status.className = 'connection-status loading';
+    
+    // Sauvegarder d'abord pour que l'API ait les bonnes valeurs
+    await saveConfig();
+    
+    try {
+        const result = await api('/config/test-tvdb', { method: 'POST' });
         status.textContent = result.message;
         status.className = `connection-status ${result.success ? 'success' : 'error'}`;
     } catch (error) {

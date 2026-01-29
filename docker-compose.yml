@@ -12,4 +12,6 @@ services:
       - ./data:/app/data
     environment:
       - TMDB_API_KEY=${TMDB_API_KEY}
+      - TVDB_API_KEY=${TVDB_API_KEY}
       - TMDB_LANGUAGE=fr-FR
+      - TVDB_LANGUAGE=fr-FR

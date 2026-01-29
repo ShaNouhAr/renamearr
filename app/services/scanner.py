@@ -15,6 +15,7 @@ from app.models import (
 )
 from app.services.parser import parser, ParsedMedia
 from app.services.tmdb import tmdb_service
+from app.services.tvdb import tvdb_service
 from app.services.linker import file_linker
 from app.services.config_manager import config_manager
 
@@ -177,37 +178,90 @@ class MediaScanner:
         return media_file, True
     
     async def process_file(self, session: AsyncSession, media_file: MediaFile) -> MediaFile:
-        """Traite un fichier: recherche TMDB et création de lien."""
+        """Traite un fichier: recherche TMDB/TVDB et création de lien.
+        
+        - Films: utilise TMDB
+        - Séries: utilise TVDB (comme Sonarr)
+        """
         try:
-            # Rechercher sur TMDB
-            match = await tmdb_service.match_media(
-                title=media_file.parsed_title or "",
-                year=media_file.parsed_year,
-                media_type=media_file.media_type,
-            )
-            
-            if not match:
-                media_file.status = ProcessingStatus.MANUAL
-                media_file.error_message = "Aucune correspondance TMDB trouvée"
-                
-                # Créer un lien temporaire dans le dossier _Manual
-                source_path = Path(media_file.source_path)
-                success, message, dest_path = file_linker.link_manual(
-                    source_path=source_path,
-                    media_type=media_file.media_type
+            if media_file.media_type == MediaType.TV:
+                # Pour les séries, utiliser TVDB
+                match = await tvdb_service.match_series(
+                    title=media_file.parsed_title or "",
+                    year=media_file.parsed_year,
                 )
-                if success:
-                    media_file.destination_path = str(dest_path)
                 
-                return media_file
-            
-            # Mettre à jour avec les infos TMDB
-            media_file.tmdb_id = match.id
-            media_file.tmdb_title = match.title
-            media_file.tmdb_year = match.year
-            media_file.tmdb_poster = match.poster_path
-            media_file.media_type = match.media_type
-            media_file.status = ProcessingStatus.MATCHED
+                if not match:
+                    media_file.status = ProcessingStatus.MANUAL
+                    media_file.error_message = "Aucune correspondance TVDB trouvée"
+                    
+                    # Créer un lien temporaire dans le dossier _Manual
+                    source_path = Path(media_file.source_path)
+                    success, message, dest_path = file_linker.link_manual(
+                        source_path=source_path,
+                        media_type=media_file.media_type
+                    )
+                    if success:
+                        media_file.destination_path = str(dest_path)
+                    
+                    return media_file
+                
+                # Mettre à jour avec les infos TVDB
+                media_file.tvdb_id = match.id
+                media_file.tvdb_title = match.title
+                media_file.tvdb_year = match.year
+                media_file.tvdb_poster = match.poster_path
+                media_file.status = ProcessingStatus.MATCHED
+                
+            else:
+                # Pour les films (et UNKNOWN), utiliser TMDB
+                match = await tmdb_service.match_media(
+                    title=media_file.parsed_title or "",
+                    year=media_file.parsed_year,
+                    media_type=media_file.media_type,
+                )
+                
+                if not match:
+                    media_file.status = ProcessingStatus.MANUAL
+                    media_file.error_message = "Aucune correspondance TMDB trouvée"
+                    
+                    # Créer un lien temporaire dans le dossier _Manual
+                    source_path = Path(media_file.source_path)
+                    success, message, dest_path = file_linker.link_manual(
+                        source_path=source_path,
+                        media_type=media_file.media_type
+                    )
+                    if success:
+                        media_file.destination_path = str(dest_path)
+                    
+                    return media_file
+                
+                # Si TMDB a détecté une série, on rebascule sur TVDB
+                if match.media_type == MediaType.TV:
+                    media_file.media_type = MediaType.TV
+                    # Relancer la recherche avec TVDB
+                    tv_match = await tvdb_service.match_series(
+                        title=match.title or media_file.parsed_title or "",
+                        year=match.year,
+                    )
+                    if tv_match:
+                        media_file.tvdb_id = tv_match.id
+                        media_file.tvdb_title = tv_match.title
+                        media_file.tvdb_year = tv_match.year
+                        media_file.tvdb_poster = tv_match.poster_path
+                        media_file.status = ProcessingStatus.MATCHED
+                    else:
+                        media_file.status = ProcessingStatus.MANUAL
+                        media_file.error_message = "Série détectée mais non trouvée sur TVDB"
+                        return media_file
+                else:
+                    # C'est bien un film
+                    media_file.tmdb_id = match.id
+                    media_file.tmdb_title = match.title
+                    media_file.tmdb_year = match.year
+                    media_file.tmdb_poster = match.poster_path
+                    media_file.media_type = match.media_type
+                    media_file.status = ProcessingStatus.MATCHED
             
             # Créer le lien
             await self.create_link(session, media_file)
@@ -221,15 +275,16 @@ class MediaScanner:
     
     async def create_link(self, session: AsyncSession, media_file: MediaFile) -> MediaFile:
         """Crée le hardlink pour un fichier."""
-        if not media_file.tmdb_id or not media_file.tmdb_title:
-            media_file.status = ProcessingStatus.FAILED
-            media_file.error_message = "Informations TMDB manquantes"
-            return media_file
-        
         source_path = Path(media_file.source_path)
         
         try:
             if media_file.media_type == MediaType.MOVIE:
+                # Films: utiliser les infos TMDB
+                if not media_file.tmdb_id or not media_file.tmdb_title:
+                    media_file.status = ProcessingStatus.FAILED
+                    media_file.error_message = "Informations TMDB manquantes"
+                    return media_file
+                
                 success, message, dest_path = file_linker.link_movie(
                     source_path=source_path,
                     title=media_file.tmdb_title,
@@ -237,6 +292,12 @@ class MediaScanner:
                     tmdb_id=media_file.tmdb_id,
                 )
             elif media_file.media_type == MediaType.TV:
+                # Séries: utiliser les infos TVDB
+                if not media_file.tvdb_id or not media_file.tvdb_title:
+                    media_file.status = ProcessingStatus.FAILED
+                    media_file.error_message = "Informations TVDB manquantes"
+                    return media_file
+                
                 # Vérifier qu'on a les infos de saison/épisode
                 if media_file.parsed_season is None or media_file.parsed_episode is None:
                     media_file.status = ProcessingStatus.MANUAL
@@ -245,9 +306,9 @@ class MediaScanner:
                 
                 success, message, dest_path = file_linker.link_tv_episode(
                     source_path=source_path,
-                    title=media_file.tmdb_title,
-                    year=media_file.tmdb_year,
-                    tmdb_id=media_file.tmdb_id,
+                    title=media_file.tvdb_title,
+                    year=media_file.tvdb_year,
+                    tvdb_id=media_file.tvdb_id,
                     season=media_file.parsed_season,
                     episode=media_file.parsed_episode,
                 )
@@ -294,20 +355,20 @@ class MediaScanner:
         stats["movies_total"] = movies_total or 0
         stats["tv_total"] = tv_total or 0  # Nombre d'épisodes
         
-        # Nombre de séries distinctes (basé sur tmdb_id unique)
+        # Nombre de séries distinctes (basé sur tvdb_id unique)
         series_count = await session.scalar(
-            select(func.count(func.distinct(MediaFile.tmdb_id))).where(
+            select(func.count(func.distinct(MediaFile.tvdb_id))).where(
                 MediaFile.media_type == MediaType.TV,
-                MediaFile.tmdb_id.isnot(None)
+                MediaFile.tvdb_id.isnot(None)
             )
         )
         stats["series_count"] = series_count or 0
         
         # Nombre de séries liées distinctes
         series_linked = await session.scalar(
-            select(func.count(func.distinct(MediaFile.tmdb_id))).where(
+            select(func.count(func.distinct(MediaFile.tvdb_id))).where(
                 MediaFile.media_type == MediaType.TV,
-                MediaFile.tmdb_id.isnot(None),
+                MediaFile.tvdb_id.isnot(None),
                 MediaFile.status == ProcessingStatus.LINKED
             )
         )
@@ -348,6 +409,10 @@ class MediaScanner:
             "tmdb_title": media_file.tmdb_title,
             "tmdb_year": media_file.tmdb_year,
             "tmdb_poster": media_file.tmdb_poster,
+            "tvdb_id": media_file.tvdb_id,
+            "tvdb_title": media_file.tvdb_title,
+            "tvdb_year": media_file.tvdb_year,
+            "tvdb_poster": media_file.tvdb_poster,
             "destination_path": media_file.destination_path,
             "status": media_file.status.value if media_file.status else None,
             "error_message": media_file.error_message,
@@ -502,7 +567,7 @@ class MediaScanner:
             await event_manager.emit_scan_started()
             await event_manager.emit_scan_progress(0, len(video_files), f"Scan de {len(video_files)} fichiers...")
         
-        # Semaphore pour limiter les requêtes TMDB concurrentes
+        # Semaphore pour limiter les requêtes API concurrentes
         semaphore = asyncio.Semaphore(self.PARALLEL_WORKERS)
         stats_lock = asyncio.Lock()
         processed_counter = {"count": 0, "total": len(video_files)}

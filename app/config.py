@@ -7,10 +7,14 @@ from pydantic import Field
 class Settings(BaseSettings):
     """Configuration de l'application."""
     
-    # TMDB
+    # TMDB (pour les films)
     tmdb_api_key: str = Field(default="", description="Clé API TMDB")
     tmdb_language: str = Field(default="fr-FR", description="Langue pour TMDB")
     tmdb_base_url: str = "https://api.themoviedb.org/3"
+    
+    # TVDB (pour les séries)
+    tvdb_api_key: str = Field(default="", description="Clé API TVDB v4")
+    tvdb_language: str = Field(default="fr-FR", description="Langue pour TVDB")
     
     # Chemins
     source_path: Path = Field(default=Path("/mnt/alldebrid/torrents"), description="Dossier source rclone")
